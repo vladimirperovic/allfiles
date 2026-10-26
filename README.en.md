@@ -167,7 +167,7 @@ For example: “Find files with kitchen in the name,” “Search document text 
 
 ## VeraCrypt and privacy boundaries
 
-AllFiles does not mount VeraCrypt or request its password. Place `--data` inside a mounted container; AllFiles puts its own temporary files under that directory. For confidential use, also consider system-disk, swap and hibernation encryption. Neither catalog encryption nor a container guarantees removal of information from RAM, the system clipboard or other programs.
+AllFiles does not mount VeraCrypt or request its password. Place `--data` inside a mounted container; SQLite temporary tables remain in memory; transaction journals are created beside the databases. Document extraction does not write plaintext work copies. For confidential use, also consider system-disk, swap and hibernation encryption. Neither catalog encryption nor a container guarantees removal of information from RAM, the system clipboard or other programs.
 
 A normal browser may leave data outside the container in its profile. You can use a dedicated profile, with the service started using `--no-browser`:
 
@@ -195,24 +195,36 @@ mkdir -p demo-data
 
 Do not use the demo directory for your real catalog. `demo` seeds it and exits; `serve` opens the interface.
 
-To build from source, use the Go version specified in `go.mod` or a compatible newer release:
+## Rust 0.3.0 and upgrading
+
+The default production build is now **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. The embedded interface and two-database format are unchanged. Existing Go source files are retained as a reference/fallback; normal build scripts and CI use Cargo.
+
+Close the old application, back up the entire data directory, then run the new executable with the same `--data`. No reimport or reindex is required. Existing encrypted catalogs retain their password and v1 manifest. Reading and updating encrypted copies has been checked in both directions between Go 0.2.0 and Rust 0.3.0. The previous source and binaries remain available at Git tag `v0.2.0`.
+
+Windows x86-64 has been exercised locally, including four browser widths, both languages, MCP and encrypted exports. Static Linux x86-64/ARM64 musl cross-builds are available; building a binary does not verify execution on that device. CI defines five native platforms, including both Mac architectures. Consult each release's notes for the packages actually built and tested.
+
+Use Rust **1.99.1** with the committed `Cargo.lock`. Building bundled native SQLite also requires a C compiler: Arch/Omarchy `base-devel`, macOS Xcode Command Line Tools, or Windows Visual Studio C++ Build Tools / llvm-mingw. Users of finished binaries do not need Rust or a separate SQLite installation.
 
 ```sh
-go test ./...
-go vet ./...
-go build -trimpath -ldflags="-s -w" -o allfiles .
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
+python scripts/smoke.py target/release/allfiles
 ```
 
-The first build downloads dependencies; the finished executable works offline. SQLite uses `github.com/ncruces/go-sqlite3` with `CGO_ENABLED=0`, without a C toolchain. Rebuild after changing the embedded web interface.
+Append `.exe` to the last path on Windows. Python is only for the integration check. Rebuild after changing `web/`, which is embedded into the executable. The optional Go-compatibility test is explicitly ignored unless a historical encrypted fixture is provided through `ALLFILES_GO_FIXTURE` and tests are run with `--include-ignored`.
 
-Use `sh scripts/build.sh 0.2.0` or PowerShell `.\scripts\build.ps1 -Version 0.2.0` to build all five targets into `dist/`: Linux amd64/arm64, macOS amd64/arm64 and Windows amd64. Packages include both guides and `THIRD_PARTY_NOTICES.txt`. CI runs native tests on Linux, Windows and macOS before cross-building; it does not publish releases automatically. Actions artifact storage is optional through the manual `upload_artifacts` input.
+`sh scripts/build.sh` or `.\scripts\build.ps1` builds the current platform into `dist/`. An optional Rust target argument (`-Target` in PowerShell) requires that target's standard library and compatible C linker. Versioning comes from `Cargo.toml`; cross-building is no longer Go's compiler-only workflow. CI performs native tests and builds on Linux amd64/arm64, macOS amd64/arm64 and Windows amd64. Artifact upload is optional; releases are published separately. Account billing/usage restrictions can prevent jobs from starting regardless of artifact storage settings.
 
-Performance depends on the actual archive, disk, query and content. Short/common queries and large document collections need their own measurements; there is no guaranteed database size or search latency. Reproducible synthetic benchmarks include `BenchmarkCatalog100K` and `BenchmarkEncryptedCatalog100K` in the Go tests. OCR, automatic synchronization between computers, original-file duplicate detection, direct LTO control and signed binaries are not included in this version.
+Performance depends on the actual archive, disk, query and content. Short/common queries and large document collections need their own measurements; there is no guaranteed database size or search latency. Reproducible synthetic benchmarks include `BenchmarkCatalog100K` and `BenchmarkEncryptedCatalog100K` in the historical `v0.2.0` Go tests. OCR, automatic synchronization between computers, original-file duplicate detection, direct LTO control and signed binaries are not included in this version.
 
-Version 0.2.0 adds transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removes redundant per-document writes during metadata import. It also bounds CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope.
+Version 0.2.0 adds transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removes redundant per-document writes during metadata import. It also bounds CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope.
 
 Remaining work includes cursor pagination for deep pages, cheaper counts for broad searches, export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 
 The separate [Go](experiments/go-search/README.md) and [Rust](experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow verifies every count and ordered ID page and records runtime versions, timings, peak process memory and benchmark executable sizes.
 
-The [measured comparison and recommendations](experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the production engine is unchanged because native integration must also address encryption and portable builds. These SQL measurements exclude complete application behavior and encryption.
+The [measured comparison and recommendations](experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the 0.3.0 production port now includes native integration and compatible encryption. These SQL measurements exclude complete application behavior and encryption.
+
+The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](experiments/results/2026-10-26-rust-app-windows.json), reproduced by `scripts/compare-http.py`.

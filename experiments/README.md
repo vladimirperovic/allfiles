@@ -41,11 +41,15 @@ Veličina programa i RAM odnose se **isključivo na male merne programe**, bez f
 
 Na najkraćim upitima Rust ima veći relativni dobitak, ali razlika iznosi stotinke ili desetinke milisekunde. Na širokim upitima mala razlika Rust/Go-native ne pokazuje pouzdanu praktičnu prednost jezika: p95 je u nekim slučajevima čak viši kod Rusta. Detaljni p95, rezultati, opcije motora i oba kruga sačuvani su u [sirovom JSON izveštaju](results/2026-10-26-linux.json).
 
+## Stanje nakon migracije
+
+Verzija 0.3.0 sada koristi kompletan Rust backend sa nativnim SQLite motorom i kompatibilnim Adiantum VFS-om. Tabele iznad ostaju istorijska mjerenja malih SQL programa; nisu veličina niti brzina pune aplikacije. Uputstva i ograničenja migracije su u glavnom README-u.
+
 ## Šta dalje ima smisla
 
 Za AllFiles ostaje razuman izbor **SQLite + FTS5**: lokalni prenosivi format bez posebnog servera i indeks za pretragu teksta. [SQLite o lokalnim aplikacijama](https://www.sqlite.org/whentouse.html), [FTS5 dokumentacija](https://www.sqlite.org/fts5.html).
 
-Najmanje rizičan sledeći eksperiment je nativni SQLite unutar Go aplikacije, sa istim korisničkim interfejsom. To ipak nije prosta zamena paketa: trenutno šifrovanje koristi poseban Go VFS, pa nativna varijanta zahteva rešenje za šifrovanje, prenosive buildove i ponovljene testove. Produkcioni motor zato nije promenjen samo na osnovu ovog testa. Dalja optimizacija brojanja širokih upita i paginacija kursorom mogu pomoći bez promene jezika.
+Najmanje rizičan sledeći eksperiment je nativni SQLite unutar Go aplikacije, sa istim korisničkim interfejsom. To ipak nije prosta zamena paketa: trenutno šifrovanje koristi poseban Go VFS, pa nativna varijanta zahteva rešenje za šifrovanje, prenosive buildove i ponovljene testove. To je bio zaključak izolovanog testa pre implementacije Rust migracije u 0.3.0. Dalja optimizacija brojanja širokih upita i paginacija kursorom mogu pomoći bez promene jezika.
 
 [Tantivy](https://github.com/quickwit-oss/tantivy) je biblioteka za punu tekstualnu pretragu pisana u Rustu i kandidat za zaseban veliki indeks sadržaja. Ovde **nije meren**; ne tvrdimo da je brži ili manji za tvoje dokumente. Zahteva drugi format indeksa, usklađivanje sa katalogom i rešavanje šifrovanja. Stvaran WinCatalog izvoz i raznovrstan skup PDF/Office dokumenata potrebni su za sledeće reprezentativno poređenje.
 

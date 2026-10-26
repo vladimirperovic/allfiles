@@ -16,16 +16,21 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: '1.26.10'
           cache-dependency-path: |
-            go.sum
             experiments/go-search/go.sum
+      - name: Read the historical Go fixture generator
+        uses: actions/checkout@v7
+        with:
+          ref: v0.2.0
+          path: .tmp/go-reference
+          persist-credentials: false
       - name: Configure temporary directories
         run: |
           printf 'ALLFILES_COMPARE_DIR=%s/allfiles-comparison\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
           printf 'CARGO_TARGET_DIR=%s/rust-search-target\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Build one verified synthetic catalog and workload manifest
-        run: go test -run '^TestBuildComparisonFixture$' -count=1 -v .
+        run: go -C .tmp/go-reference test -run '^TestBuildComparisonFixture$' -count=1 -v .
       - name: Build the identical native SQLite engine
         run: bash experiments/rust-search/build-native-sqlite.sh "$RUNNER_TEMP/sqlite-native"
       - name: Build both Go comparators

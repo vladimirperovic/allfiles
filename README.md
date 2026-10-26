@@ -4,7 +4,7 @@ Srpski · [English](README.en.md)
 
 Prenosivi katalog svih tvojih fajlova: računari, eksterni diskovi, Blu-ray diskovi i LTO kasete. Jedan program otvara lokalni web interfejs, sa gradijentima, providnim panelima i čitljivim tabelama. Katalog možeš pretraživati i kada izvorni disk nije priključen.
 
-AllFiles je namenjen prvenstveno lokalnom radu na Omarchy Linuxu, sa bazama unutar otključanog VeraCrypt kontejnera. Postoje i Windows i macOS verzije. Nema pretplate, obaveznog udaljenog servera ni ugrađenog AI modela. Sam program ne šalje dokumente u cloud. Za korišćenje gotovog programa ne instaliraš Go, Node, Python ni poseban SQLite server.
+AllFiles je namenjen prvenstveno lokalnom radu na Omarchy Linuxu, sa bazama unutar otključanog VeraCrypt kontejnera. Postoje i Windows i macOS verzije. Nema pretplate, obaveznog udaljenog servera ni ugrađenog AI modela. Sam program ne šalje dokumente u cloud. Za korišćenje gotovog programa ne instaliraš Rust, Go, Node, Python ni poseban SQLite server.
 
 ## Kako radi
 
@@ -217,7 +217,7 @@ Skeniranje zahteva da je izvorni folder dostupan računaru na kome radi servis. 
 
 AllFiles ne montira VeraCrypt i ne traži lozinku kontejnera. VeraCrypt štiti direktorijum u koji smestiš `--data`; opciona lozinka AllFiles kataloga dodatno štiti njegove baze. Kada su kontejner i katalog otključani, aplikacija može čitati podatke.
 
-- Drži baze, radne fajlove i njihove rezervne kopije u kontejneru. AllFiles svoje privremene podatke drži pod direktorijumom podataka.
+- Drži baze, radne fajlove i njihove rezervne kopije u kontejneru. SQLite privremene tabele ostaju u memoriji, a transakcioni dnevnici pored baza. Izdvajanje dokumenata ne pravi nešifrovane radne kopije.
 - Za poverljiv rad koristi šifrovan sistemski disk i proveri zaštitu swap prostora i hibernacije. Kontejner ne uklanja tragove iz RAM-a ili drugih aplikacija.
 - Običan browser može ostaviti tragove u svom profilu izvan kontejnera. Za odvojeni profil pokreni AllFiles sa `--no-browser`, pa browser sa profilom u kontejneru.
 - Dugme za kopiranje putanje koristi sistemski clipboard. Njegovu istoriju i sinhronizaciju kontroliše operativni sistem.
@@ -249,41 +249,57 @@ mkdir -p demo-data
 
 Nemoj koristiti demo direktorijum kao svoj pravi katalog. `demo` dodaje sintetičke podatke i završava se; druga komanda otvara preglednik.
 
+## Rust izdanje 0.3.0 i nadogradnja
+
+Produkcioni program je sada napisan u **Rustu**, sa nativnim **SQLite 3.54.1 + FTS5**. Skeniranje, PDF/Office tekst, CSV/XML/EFU uvoz, lokalni HTTP server, MCP, izvoz i Adiantum šifrovanje rade u istom izvršnom fajlu. Web interfejs i format dve baze ostaju isti. Go izvornici su zadržani kao rezervna referenca; podrazumevani build i CI koriste Cargo.
+
+Zatvori staru aplikaciju, napravi rezervnu kopiju celog direktorijuma podataka i pokreni novi program sa istim `--data`. Nije potreban novi uvoz ili indeksiranje. Šifrovani katalozi zadržavaju postojeću lozinku i manifest v1. Kompatibilnost je proverena čitanjem i dopunjavanjem kataloga u oba smera između Go 0.2.0 i Rust 0.3.0. Stari program i izvor ostaju dostupni kroz Git tag `v0.2.0`.
+
+Lokalno su provereni Windows x86-64 program, browser na četiri širine, oba jezika, MCP i šifrovani izvoz. Linux x86-64 i ARM64 musl programi mogu se izgraditi statički; cross-build nije dokaz pokretanja na tim uređajima. CI je podešen za pet nativnih platformi, uključujući oba Mac procesora. Dostupne i stvarno proverene pakete pogledaj u napomenama konkretnog izdanja.
+
+### Mjerenje kompletne Rust aplikacije
+
+Na istom Windows računaru, nad istim nešifrovanim sintetičkim katalogom od **100.050 fajlova**, dva uzastopna kruga sa obrnutim redosledom programa, 3 zagrevanja i 15 merenja po upitu. Prikazan je prosek medijana dva kruga. Meri se ceo HTTP odgovor preko trajne lokalne konekcije, uključujući metapodatke i tekstualne isečke; bez browsera i indeksiranja.
+
+| HTTP pretraga | Go 0.2.0 | Rust 0.3.0 |
+|---|---:|---:|
+| Redak naziv | 1.716 ms | 1.440 ms |
+| Prva stranica bez upita | 0.510 ms | 0.507 ms |
+| Stranica od 90.000. stavke | 31.712 ms | 15.736 ms |
+| Čest naziv, 99.999 pogodaka | 319.589 ms | 129.772 ms |
+| Čest naziv, stranica od 90.000. stavke | 384.653 ms | 167.324 ms |
+| Jedno slovo, 100.000 pogodaka | 241.739 ms | 118.776 ms |
+| Sadržaj: 50 lokacija istog dokumenta | 6.929 ms | 4.960 ms |
+
+Windows izvršni fajl: **14,24 MiB → 6,18 MiB** (oko 57% manji). Katalog ostaje u istom formatu; promena jezika sama ne smanjuje bazu. Ovo poređenje obuhvata i promenu SQLite motora/verzije (Go 3.53.4, Rust nativni 3.54.1), pa nije izolovan efekat jezika. Na sadržajnom testu 50 fajlova deli jedan tekst od oko 1 MiB; to ne predstavlja veliku zbirku različitih dokumenata. Ne meri hladan disk, šifrovanje, RAM ni bateriju.
+
+[Sirovi rezultati](experiments/results/2026-10-26-rust-app-windows.json) sadrže sve uzorke. `scripts/compare-http.py` proverava ukupan broj i redosled ID-jeva svakog odgovora i ne menja izvorne probne baze.
+
 ## Razvoj i build
 
-Potreban je Go iz verzije navedene u `go.mod` (1.26.10 ili noviji kompatibilni alat). Prva izgradnja preuzima Go zavisnosti. Gotov program radi bez interneta.
+Koristi Rust **1.99.1** za ponovljivu izgradnju sa zaključanim `Cargo.lock`. Za nativni SQLite potreban je i C compiler: `base-devel` na Omarchy/Arch Linuxu, Xcode Command Line Tools na Macu, ili Visual Studio C++ Build Tools / llvm-mingw na Windowsu. SQLite izvor se kompajlira u program; korisniku ne treba poseban SQLite paket.
 
 ```bash
-go test ./...
-go vet ./...
-go build -trimpath -ldflags="-s -w" -o allfiles .
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
+python scripts/smoke.py target/release/allfiles
 ```
 
-Web interfejs ugrađuje se u izvršni fajl. SQLite koristi `github.com/ncruces/go-sqlite3`, bez C toolchaina. Nakon promene interfejsa ponovo izgradi program.
+Na Windowsu poslednja putanja završava se sa `.exe`. Python je potreban samo za integracionu proveru, ne za aplikaciju. `cargo build` ugrađuje resurse iz `web/`; posle izmene interfejsa ponovo izgradi program.
 
-Za svih pet ciljnih platformi:
-
-```bash
-sh scripts/build.sh
-```
-
-Ili iz PowerShella:
-
-```powershell
-.\scripts\build.ps1
-```
-
-Opciona verzija: `sh scripts/build.sh 0.2.0` ili `.\scripts\build.ps1 -Version 0.2.0`. Rezultati se nalaze u `dist/`:
+`sh scripts/build.sh` ili `.\scripts\build.ps1` pakuje program za tekuću platformu u `dist/`. Za drugi Rust target prosledi ga kao prvi argument, odnosno `-Target`; prethodno instaliraj njegov standardni runtime i odgovarajući C linker. Ovo više nije Go cross-build bez C alata. Verzija dolazi iz `Cargo.toml`.
 
 | Fajl | Platforma |
 |---|---|
 | `allfiles-linux-amd64` | Omarchy i drugi Linux sistemi na Intel/AMD računarima |
-| `allfiles-linux-arm64` | Linux na ARM64 |
-| `allfiles-darwin-arm64` | macOS na Apple Silicon |
-| `allfiles-darwin-amd64` | macOS na Intel procesorima |
-| `allfiles-windows-amd64.exe` | Windows na Intel/AMD računarima |
+| `allfiles-linux-arm64` | Linux ARM64 |
+| `allfiles-darwin-arm64` | macOS Apple Silicon |
+| `allfiles-darwin-amd64` | macOS Intel |
+| `allfiles-windows-amd64.exe` | Windows Intel/AMD |
 
-GitHub Actions pokreće testove na Linuxu, Windowsu i macOS-u, a zatim uvek gradi i pakuje ovih pet izvršnih fajlova sa `CGO_ENABLED=0`. Čuvanje Actions artifact-a je opciono: pri ručnom pokretanju workflow-a uključi `upload_artifacts` (podrazumevano isključeno). Tako se testovi i build ne oslanjaju na raspoloživu kvotu za čuvanje artifact-a. Uključeni artifact-i sadrže arhivu programa, README i SHA-256 kontrolni zbir i čuvaju se 30 dana. Arhive za preuzimanje objavljuju se zasebno kroz GitHub Releases; workflow ih ne objavljuje automatski. Build ne uključuje tvoje kataloge. Baze, lokalni izvozi, browser profili i privremeni fajlovi izuzeti su preko `.gitignore`; lične fajlove ne dodaj ručno u Git.
+GitHub Actions definicija testira i gradi svaku platformu na njenom nativnom runner-u. Čuvanje arhiva je opciono kroz `upload_artifacts`, podrazumevano isključeno; objavljivanje izdanja nije automatsko. GitHub kvota i billing naloga mogu sprečiti izvršavanje čak i kada je čuvanje artifact-a isključeno. Katalozi, lozinke, lokalni izvozi i browser profili ne ulaze u Git niti u distributivne arhive.
 
 ## Analiza performansi i preostala poboljšanja
 
@@ -300,17 +316,17 @@ Upareno sintetičko merenje na istom Windows računaru, Go 1.26.10, oko 100.000 
 | Ukupne memorijske alokacije prethodne pretrage | 724 MiB | 4,41 MiB |
 | Uvoz 10.000 PDF stavki, samo metapodaci | 65,95 s | 0,875 s |
 
-Poslednji red meri zaseban CSV izvoz, ne čitanje teksta iz 10.000 PDF dokumenata. Alokacije nisu vršna zauzetost RAM-a. Ovo su konkretni probni skupovi, ne garancija za stvarnu arhivu. `review_benchmark_test.go` sadrži eksplicitne benchmarkove koji se ne pokreću u redovnim testovima.
+Poslednji red meri zaseban CSV izvoz, ne čitanje teksta iz 10.000 PDF dokumenata. Alokacije nisu vršna zauzetost RAM-a. Ovo su konkretni probni skupovi, ne garancija za stvarnu arhivu. Istorijska verzija `v0.2.0:review_benchmark_test.go` sadrži eksplicitne benchmarkove koji se ne pokreću u redovnim testovima.
 
 Preostala poboljšanja: paginacija kursorom za duboke stranice, jeftiniji ukupan broj rezultata za veoma široke upite, zaseban radni proces sa granicom vremena/memorije za nepouzdane PDF-ove i izvoz sa napretkom/otkazivanjem. PDF biblioteka može obraditi celu jednu stranicu pre provere našeg limita, pa granice ulaza/izdvojenog teksta nisu stroga izolacija parsera. Osnovna aplikacija je i dalje namenjena lokalnom radu; objava na javnom serveru zahteva posebno rešenu autentifikaciju i HTTPS.
 
-Izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
+Istorijski izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
 
 [Izmerena tabela Go / nativni Go / Rust i preporuke](experiments/README.md) pokazuju da je najveći deo poboljšanja širokih SQL upita u tom eksperimentu došao od nativnog SQLite motora. Sirovi rezultati oba kruga uključeni su u repozitorijum; brzina kompletne aplikacije i šifrovanje nisu obuhvaćeni tim merenjem.
 
-Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
+Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje iz Git taga `v0.2.0`: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
 
-Šifrovana kopija istog probnog kataloga dala je takođe **2,0–2,1 ms** za ove upite u 30 ponavljanja sa zagrejanim kešom. Ovo ne meri prvo otključavanje, čitanje sa hladnog diska ili trošak skeniranja i upisa. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkEncryptedCatalog100K -benchtime 30x -count 1`.
+Šifrovana kopija istog probnog kataloga dala je takođe **2,0–2,1 ms** za ove upite u 30 ponavljanja sa zagrejanim kešom. Ovo ne meri prvo otključavanje, čitanje sa hladnog diska ili trošak skeniranja i upisa. Ponovljivo merenje iz Git taga `v0.2.0`: `go test -v -run '^$' -bench BenchmarkEncryptedCatalog100K -benchtime 30x -count 1`.
 
 - Vreme skeniranja, veličinu baze i brzinu pretrage treba izmeriti na stvarnoj arhivi. Nema izmišljenih obećanja o milionima fajlova ili određenom broju megabajta.
 - OCR, automatsko otkrivanje duplikata po sadržaju, direktno upravljanje LTO kasetama i automatska sinhronizacija između računara nisu uključeni.

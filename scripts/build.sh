@@ -1,29 +1,19 @@
 #!/bin/sh
-# Cross-compile standalone executables. Requires the Go version from go.mod.
+# Native build, or an installed Rust target with its matching C linker.
 set -eu
-
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
-cd "$project_dir"
-
-version=${1:-0.2.0}
-case "$version" in
-  *[!a-zA-Z0-9._+-]*|'')
-    printf '%s\n' 'Version must contain only letters, digits, dots, underscores, plus or minus signs.' >&2
-    exit 1
-    ;;
+cd "$script_dir/.."
+target=${1:-$(rustc -vV | sed -n 's/^host: //p')}
+case "$target" in
+  x86_64-unknown-linux-*) name=allfiles-linux-amd64; extension= ;;
+  aarch64-unknown-linux-*) name=allfiles-linux-arm64; extension= ;;
+  x86_64-apple-darwin) name=allfiles-darwin-amd64; extension= ;;
+  aarch64-apple-darwin) name=allfiles-darwin-arm64; extension= ;;
+  x86_64-pc-windows-*) name=allfiles-windows-amd64.exe; extension=.exe ;;
+  *) printf 'Unsupported target: %s\n' "$target" >&2; exit 1 ;;
 esac
-
+cargo build --release --locked --target "$target"
 mkdir -p dist
-for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
-  target_os=${target%/*}
-  target_arch=${target#*/}
-  extension=
-  if [ "$target_os" = windows ]; then extension=.exe; fi
-  output="dist/allfiles-${target_os}-${target_arch}${extension}"
-  printf 'Building %s\n' "$target"
-  CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
-    go build -trimpath -ldflags="-s -w -X main.Version=$version" -o "$output" .
-done
+cp "${CARGO_TARGET_DIR:-target}/$target/release/allfiles$extension" "dist/$name"
 cp README.md README.en.md THIRD_PARTY_NOTICES.txt dist/
-printf '%s\n' 'Binaries are in dist/. No catalogs or document content are included.'
+printf 'Built dist/%s. Catalogs are not included.\n' "$name"

@@ -26,6 +26,7 @@ preview/
 __pycache__/
 coverage.out
 /experiments/rust-search/target/
+/target/
 *.test
 *.zip
 *.tar.gz

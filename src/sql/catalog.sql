@@ -1,0 +1,18 @@
+PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA trusted_schema=ON;
+ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,root TEXT NOT NULL,label TEXT NOT NULL,kind TEXT NOT NULL,location TEXT NOT NULL DEFAULT '',last_scan TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'new',UNIQUE(root,label));
+ CREATE TABLE IF NOT EXISTS directories(id INTEGER PRIMARY KEY,source_id TEXT NOT NULL REFERENCES sources(id),path TEXT NOT NULL,search_path TEXT NOT NULL,UNIQUE(source_id,path));
+ CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY AUTOINCREMENT,source_id TEXT NOT NULL REFERENCES sources(id),dir_id INTEGER NOT NULL REFERENCES directories(id),name TEXT NOT NULL,search_name TEXT NOT NULL,extension TEXT NOT NULL,size INTEGER NOT NULL,modified INTEGER NOT NULL,modified_ns INTEGER NOT NULL,version TEXT NOT NULL,seen_scan TEXT NOT NULL,text_status TEXT NOT NULL DEFAULT 'not_indexed',text_detail TEXT NOT NULL DEFAULT '',UNIQUE(dir_id,name));
+ CREATE INDEX IF NOT EXISTS files_source ON files(source_id);
+ CREATE INDEX IF NOT EXISTS files_name ON files(search_name);
+ CREATE INDEX IF NOT EXISTS files_ext ON files(extension);
+ CREATE INDEX IF NOT EXISTS files_modified ON files(modified DESC);
+ CREATE INDEX IF NOT EXISTS files_size ON files(size DESC);
+ CREATE VIRTUAL TABLE IF NOT EXISTS names USING fts5(search_name,content='files',content_rowid='id',tokenize='trigram case_sensitive 1',detail=none,columnsize=0);
+ CREATE VIRTUAL TABLE IF NOT EXISTS paths USING fts5(search_path,content='directories',content_rowid='id',tokenize='trigram case_sensitive 1',detail=none,columnsize=0);
+ CREATE TRIGGER IF NOT EXISTS files_ai AFTER INSERT ON files BEGIN INSERT INTO names(rowid,search_name) VALUES(new.id,new.search_name); END;
+ CREATE TRIGGER IF NOT EXISTS files_ad AFTER DELETE ON files BEGIN INSERT INTO names(names,rowid,search_name) VALUES('delete',old.id,old.search_name); END;
+ CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF search_name ON files WHEN old.search_name != new.search_name BEGIN INSERT INTO names(names,rowid,search_name) VALUES('delete',old.id,old.search_name); INSERT INTO names(rowid,search_name) VALUES(new.id,new.search_name); END;
+ CREATE TRIGGER IF NOT EXISTS dirs_ai AFTER INSERT ON directories BEGIN INSERT INTO paths(rowid,search_path) VALUES(new.id,new.search_path); END;
+ CREATE TRIGGER IF NOT EXISTS dirs_ad AFTER DELETE ON directories BEGIN INSERT INTO paths(paths,rowid,search_path) VALUES('delete',old.id,old.search_path); END;
+ INSERT OR IGNORE INTO meta(key,value) VALUES('schema','1');;
