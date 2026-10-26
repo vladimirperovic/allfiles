@@ -193,7 +193,7 @@ func registerEncryptionVFS(dir string, e *encryptionState) (string, error) {
 	wrapped := adiantum.Wrap(vfs.Find(""), nil)
 	keys := make(map[string][]byte, 2)
 	for name, key := range map[string][]byte{"catalog.sqlite": e.catalogKey, "content.sqlite": e.contentKey} {
-		p, err := wrapped.FullPathname(filepath.Join(dir, name))
+		p, err := canonicalDatabasePath(filepath.Join(dir, name))
 		if err != nil {
 			return "", err
 		}
@@ -202,6 +202,23 @@ func registerEncryptionVFS(dir string, e *encryptionState) (string, error) {
 	name := "allfiles-" + randomID()
 	vfs.Register(name, &keyedVFS{VFS: wrapped, keys: keys})
 	return name, nil
+}
+
+func canonicalDatabasePath(path string) (string, error) {
+	// Match the OS VFS's resolved filename without interpreting its non-nil
+	// SQLITE_OK_SYMLINK informational result as an error. macOS /var aliases,
+	// Windows short names and case aliases all legitimately return that result.
+	var leaf string
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		path, leaf = filepath.Split(path)
+	} else if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(filepath.Join(resolved, leaf))
 }
 
 func sqliteURI(p, vfsName string) string {

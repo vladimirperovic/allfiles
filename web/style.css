@@ -849,19 +849,21 @@ html,body{background:var(--canvas)}
 :root .app-shell{background:radial-gradient(ellipse 67% 71% at 100% 0%,rgba(74,95,125,.73) 0,rgba(46,61,88,.35) 51%,transparent 80%),radial-gradient(ellipse 61% 69% at 25% 43%,rgba(54,48,76,.53) 0,transparent 77%),radial-gradient(ellipse 65% 68% at 87% 100%,rgba(39,45,69,.67) 0,transparent 80%),linear-gradient(130deg,#252632,#1d2430 66%,#20222f)}
 :root .sidebar{background:linear-gradient(165deg,#252933 0%,#222530 57%,#1e222b 100%)}
 :root .glass-panel,:root .stat-card,:root .search-panel,:root .details-panel,:root .source-card,:root .action-card,:root .job-panel,:root .storage-panel{background:var(--surface);border-color:var(--surface-line)}
-:root .results-panel{background:var(--frame);border-color:var(--surface-line)}
-:root .file-table thead th{background:var(--table-head);color:#fff;border-bottom-color:var(--surface-line)}
-:root .file-table tbody tr{background:var(--row-odd);clip-path:inset(0 round 9px)}
-:root .file-table tbody tr:nth-child(even){background:var(--row-even)}
-:root .file-table tbody tr:hover{background:var(--row-hover)}
-:root .file-table tbody tr.selected{background:var(--row-selected)}
+/* Five bounded glass surfaces reveal softened particles without filtering every row. */
+:root .stat-card{background:linear-gradient(120deg,rgba(51,60,75,.46),rgba(41,49,62,.52));backdrop-filter:blur(1.5px)!important;-webkit-backdrop-filter:blur(1.5px)!important}
+:root .results-panel{background:linear-gradient(115deg,rgba(40,49,62,.18),rgba(34,42,54,.24));border-color:var(--surface-line);backdrop-filter:blur(1.5px)!important;-webkit-backdrop-filter:blur(1.5px)!important}
+:root .file-table thead th{background:rgba(43,52,67,.90);color:#fff;border-bottom-color:var(--surface-line)}
+:root .file-table tbody tr{background:linear-gradient(110deg,rgba(64,76,96,.48),rgba(57,69,87,.44) 50%,rgba(48,59,76,.40));clip-path:inset(0 round 9px)}
+:root .file-table tbody tr:nth-child(even){background:linear-gradient(110deg,rgba(74,87,108,.54),rgba(66,78,99,.51) 50%,rgba(56,68,88,.48))}
+:root .file-table tbody tr:hover{background:linear-gradient(110deg,rgba(85,100,123,.67),rgba(65,79,101,.61))}
+:root .file-table tbody tr.selected{background:linear-gradient(110deg,rgba(91,107,131,.74),rgba(70,85,107,.68))}
 :root .file-table tbody tr:focus-visible{outline:2px solid #c9d8ec;outline-offset:-2px}
 :root .file-table tbody tr td{background:transparent;border-top-color:var(--surface-line);border-bottom-color:rgba(10,12,22,.12)}
 :root .file-table tbody tr:hover td:first-child{box-shadow:inset 2px 0 #ff514699}
 :root .file-table tbody tr.selected td:first-child{box-shadow:inset 2px 0 #ff5146}
 :root .file-name,:root .file-table td.size-column,:root .source-table-cell span{color:#fff}
 :root .file-path,:root .file-snippet,:root .file-table td.date-column,:root .source-table-cell .icon{color:var(--surface-muted)}
-:root .table-footer{background:var(--frame);color:var(--surface-muted);border-top-color:var(--surface-line)}
+:root .table-footer{background:linear-gradient(115deg,rgba(40,49,62,.88),rgba(34,42,54,.90));color:var(--surface-muted);border-top-color:var(--surface-line)}
 :root .search-options,:root .detail-metadata,:root .text-preview,:root .source-card-footer,:root .job-metrics,:root .storage-path{border-top-color:var(--surface-line)}
 :root .detail-path{background:var(--field);border-color:var(--surface-line);color:var(--surface-muted)}
 :root .segmented button.selected,:root .nav-item.active,:root .button-ghost{background:var(--control);border-color:var(--surface-line);color:#fff}

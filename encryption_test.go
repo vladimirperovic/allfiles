@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -266,4 +267,40 @@ func TestEncryptionFailedSecondExportRemovesOnlyOwnedFiles(t *testing.T) {
 		t.Fatalf("partial encrypted backup remained: %v", err)
 	}
 	databaseSearch(t, store, SearchOptions{Mode: "content", Query: "garden"}, 1)
+}
+
+func TestEncryptionCanonicalDirectoryAliases(t *testing.T) {
+	base := t.TempDir()
+	actual := filepath.Join(base, "canonical-lowercase")
+	if err := os.Mkdir(actual, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(base, "directory-alias")
+	if runtime.GOOS == "windows" {
+		// Case aliases need no Windows symlink privilege and exercise the same
+		// VFS canonicalization result as the runner's short temporary paths.
+		alias = strings.ToUpper(actual)
+	} else if err := os.Symlink(actual, alias); err != nil {
+		t.Fatal(err)
+	}
+	plain := newDatabaseTestStore(t)
+	source := databaseTestSource(t, plain, "Alias archive")
+	file := databaseTestUpsert(t, plain, source, "initial", databaseTestFile("alias-test.txt", 30, 1000000000))[0]
+	if err := plain.RecordContent(file.ID, file.Version, "indexed", "canonical alias searchable text", ""); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(alias, "protected")
+	if _, err := plain.ExportProtected(destination, true, []byte(testEncryptionPassword)); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{destination, filepath.Join(actual, "protected")} {
+		store, err := OpenStoreWithPassword(path, []byte(testEncryptionPassword))
+		if err != nil {
+			t.Fatal(err)
+		}
+		databaseSearch(t, store, SearchOptions{Mode: "content", Query: "searchable"}, 1)
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
