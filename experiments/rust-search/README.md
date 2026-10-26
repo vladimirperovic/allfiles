@@ -27,7 +27,7 @@ Both database URI paths use `mode=ro`, and the connection enables `query_only`, 
 
 ## Interpreting results
 
-Run the Go and Rust comparators on the **same runner and fixture**, preferably in alternating order and multiple process runs. Report data size, case names, SQLite versions, compile options, toolchain versions and measurement spread. Native rusqlite and AllFiles' Go/WASM SQLite driver have different execution and FFI paths. Even with identical SQLite versions and SQL, any measured difference belongs to the whole tested stack; it does not isolate the Rust language from the Go language or establish that a full application rewrite will be faster.
+Run the Go and Rust comparators on the **same runner and fixture**, preferably in alternating order and multiple process runs. Report data size, case names, SQLite versions, compile options, toolchain versions and measurement spread. Native rusqlite and AllFiles' generated Go SQLite engine have different execution and FFI paths. Even with identical SQLite versions and SQL, any measured difference belongs to the whole tested stack; it does not isolate the Rust language from the Go language or establish that a full application rewrite will be faster.
 
 The output is one JSON object on stdout. Errors go to stderr with a nonzero exit status. The result includes observed count and ordered IDs to make correctness reviewable alongside timings.
 

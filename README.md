@@ -306,6 +306,8 @@ Preostala poboljšanja: paginacija kursorom za duboke stranice, jeftiniji ukupan
 
 Izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
 
+[Izmerena tabela Go / nativni Go / Rust i preporuke](experiments/README.md) pokazuju da je najveći deo poboljšanja širokih SQL upita u tom eksperimentu došao od nativnog SQLite motora. Sirovi rezultati oba kruga uključeni su u repozitorijum; brzina kompletne aplikacije i šifrovanje nisu obuhvaćeni tim merenjem.
+
 Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
 
 Šifrovana kopija istog probnog kataloga dala je takođe **2,0–2,1 ms** za ove upite u 30 ponavljanja sa zagrejanim kešom. Ovo ne meri prvo otključavanje, čitanje sa hladnog diska ili trošak skeniranja i upisa. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkEncryptedCatalog100K -benchtime 30x -count 1`.
