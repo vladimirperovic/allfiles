@@ -1,0 +1,37 @@
+# Personal catalogs and document content must never enter the repository.
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+data/
+allfiles-data/
+demo-data/
+exports/
+browser-profile/
+*.log
+.allfiles.lock
+
+# Generated executables, archives, previews and caches.
+/allfiles
+/allfiles.exe
+/allfiles-*
+dist/
+preview/
+.tmp/
+.cache/
+.venv/
+coverage.out
+*.test
+*.zip
+*.tar.gz
+
+# Local environment and editor files.
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

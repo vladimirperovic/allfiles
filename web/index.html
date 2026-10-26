@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="sr-Latn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#211b38">
+  <title>AllFiles — Sve na jednom mestu</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/themes.css">
+  <script src="/app.js" defer></script>
+  <script src="/themes.js" defer></script>
+</head>
+<body>
+  <svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="7.3"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
+    <symbol id="i-drive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M3 14h18m-13 3h.01M11 17h.01"/></symbol>
+    <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M7 5a8 8 0 0 0-3 5m13 9a8 8 0 0 0 3-5"/></symbol>
+    <symbol id="i-laptop" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="13" rx="2"/><path d="m5 16-3 4h20l-3-4M9 20h6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h5l3 3h6a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M13 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10l-7-7Z"/><path d="M13 3v7h7M8 14h8m-8 3h5"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M10 3v3h3V3m-3 6V6h3v3h-3Zm0 3V9h3v3m-2 0h2v5h-3v-3a2 2 0 0 1 1-2Z"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 3-3 5 5"/></symbol>
+    <symbol id="i-sheet" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 9v12"/></symbol>
+    <symbol id="i-video" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4V8Z"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M4 5h16M4 10h16M4 15h10M4 20h13"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 8a8 8 0 0 0-14-3L3 8m0-5v5h5M4 16a8 8 0 0 0 14 3l3-3m0 5v-5h-5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v13m-5-5 5 5 5-5M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v6l4 2"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9m-6-7a9 9 0 1 0 12 0"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+  </svg>
+
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#search" aria-label="AllFiles početna"><img src="/logo.svg" alt="" width="42" height="42"><span>All<span class="brand-light">Files</span><small>VAŠ LIČNI KATALOG</small></span></a>
+      <div class="sidebar-section-label">RADNI PROSTOR</div>
+      <nav class="navigation" aria-label="Glavna navigacija">
+        <button class="nav-item active" data-view="search" aria-current="page"><svg class="icon"><use href="#i-search"/></svg><span>Pretraga</span><span class="nav-key">/</span></button>
+        <button class="nav-item" data-view="sources"><svg class="icon"><use href="#i-grid"/></svg><span>Moji mediji</span><span class="nav-count" id="nav-source-count">0</span></button>
+        <button class="nav-item" data-view="index"><svg class="icon"><use href="#i-sync"/></svg><span>Indeksiranje</span><span class="job-dot" id="nav-job-dot" hidden></span></button>
+      </nav>
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-section-label media-heading">MOJA BIBLIOTEKA<button class="icon-button tiny" data-action="add-source" aria-label="Dodaj medij"><svg class="icon"><use href="#i-plus"/></svg></button></div>
+      <div class="sidebar-sources" id="sidebar-sources"><p class="sidebar-empty">Vaši računari, diskovi i arhive na jednom mestu.</p></div>
+      <div class="sidebar-bottom">
+        <div class="privacy-card"><span class="privacy-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong>Lokalno. Lično.</strong><p>Vaši fajlovi ostaju vaši.</p></div></div>
+        <button class="sidebar-utility" data-action="export"><svg class="icon"><use href="#i-download"/></svg><span>Spakuj za USB</span><svg class="icon small"><use href="#i-chevron"/></svg></button>
+        <div class="sidebar-footer"><span id="version-label">AllFiles · lokalni katalog</span><button class="icon-button tiny" data-action="shutdown" title="Zatvori AllFiles" aria-label="Zatvori AllFiles"><svg class="icon"><use href="#i-power"/></svg></button></div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div class="breadcrumb"><span>Biblioteka</span><svg class="icon small"><use href="#i-chevron"/></svg><strong id="breadcrumb-current">Pretraga</strong></div>
+        <div class="topbar-actions"><span class="connection-pill" id="connection-status"><i></i>Lokalni prostor</span><span class="demo-pill" id="demo-badge" hidden>DEMO PODACI</span><button class="button button-coral" data-action="add-source"><svg class="icon"><use href="#i-plus"/></svg><span>Dodaj medij</span></button></div>
+      </header>
+      <div class="connection-error" id="connection-error" role="alert" hidden></div>
+
+      <section class="view" id="view-search" aria-labelledby="search-title">
+        <div class="page-heading"><div><p class="eyebrow">SVE NA SVOM MESTU</p><h1 id="search-title">Vaši fajlovi. <span>Bez traženja.</span></h1><p class="page-subtitle">Jedna pretraga za sve diskove, uređaje i arhive.</p></div><div class="heading-orbit" aria-hidden="true"><span></span><svg class="icon"><use href="#i-folder"/></svg></div></div>
+        <div class="stats-grid" aria-label="Statistika kataloga">
+          <article class="stat-card"><span class="stat-icon violet"><svg class="icon"><use href="#i-file"/></svg></span><div><p>Fajlova u katalogu</p><strong id="stat-files">0</strong></div><span class="stat-corner">01</span></article>
+          <article class="stat-card"><span class="stat-icon blue"><svg class="icon"><use href="#i-drive"/></svg></span><div><p>Ukupno podataka</p><strong id="stat-size">0 B</strong></div><span class="stat-corner">02</span></article>
+          <article class="stat-card"><span class="stat-icon pink"><svg class="icon"><use href="#i-grid"/></svg></span><div><p>Medija u katalogu</p><strong id="stat-sources">0</strong></div><span class="stat-corner">03</span></article>
+          <article class="stat-card"><span class="stat-icon coral"><svg class="icon"><use href="#i-text"/></svg></span><div><p>Indeksiranih dokumenata</p><strong id="stat-documents">0</strong></div><span class="stat-corner">04</span></article>
+        </div>
+
+        <div class="search-panel glass-panel">
+          <div class="search-input-wrap"><svg class="icon search-symbol"><use href="#i-search"/></svg><label class="sr-only" for="search-input">Pretraži nazive, putanje ili sadržaj</label><input type="search" id="search-input" placeholder="Pronađite nešto, bilo gde…" autocomplete="off" spellcheck="false"><kbd>/</kbd><button class="icon-button" id="clear-search" aria-label="Obriši pretragu" hidden><svg class="icon"><use href="#i-close"/></svg></button></div>
+          <div class="search-options"><div class="segmented" role="group" aria-label="Pretražuj"><button class="selected" data-mode="files" aria-pressed="true"><svg class="icon small"><use href="#i-file"/></svg>Fajlovi</button><button data-mode="content" aria-pressed="false"><svg class="icon small"><use href="#i-text"/></svg>Sadržaj</button><button data-mode="all" aria-pressed="false">Sve</button></div><div class="filter-controls"><label class="sr-only" for="source-filter">Medij</label><select id="source-filter"><option value="">Svi mediji</option></select><label class="sr-only" for="ext-filter">Tip fajla</label><select id="ext-filter"><option value="">Svi tipovi</option><option value="pdf">PDF</option><option value="docx">Word · DOCX</option><option value="xlsx">Excel · XLSX</option><option value="pptx">PowerPoint · PPTX</option><option value="jpg">Slike · JPG</option><option value="png">Slike · PNG</option><option value="mp4">Video · MP4</option><option value="zip">Arhive · ZIP</option></select></div></div>
+        </div>
+
+        <div class="results-heading"><div><h2 id="results-title">Svi fajlovi <span id="result-count">0</span></h2><span class="search-timing" id="search-timing"></span></div><label class="sort-label">Sortiraj <select id="sort-select"><option value="name">Naziv</option><option value="modified">Najnovije</option><option value="size">Veličina</option></select></label></div>
+        <div class="library-layout" id="library-layout">
+          <section class="results-panel glass-panel" aria-label="Rezultati pretrage" aria-busy="false" id="results-panel">
+            <div class="table-scroll" id="table-scroll"><table class="file-table"><thead><tr><th scope="col">Naziv fajla</th><th scope="col">Medij</th><th scope="col" class="size-column">Veličina</th><th scope="col" class="date-column">Izmenjeno</th><th scope="col"><span class="sr-only">Detalji</span></th></tr></thead><tbody id="file-rows"></tbody></table></div>
+            <div class="empty-state" id="empty-state"><div class="empty-art"><div class="empty-ring"></div><svg class="icon"><use href="#i-folder"/></svg><span class="empty-spark"></span></div><h3>Vaša biblioteka počinje ovde.</h3><p>Dodajte prvi disk ili folder. Fajlove ćete pronaći<br>i kada njihov medij nije priključen.</p><button class="button button-coral" data-action="add-source"><svg class="icon"><use href="#i-plus"/></svg>Dodaj prvi medij</button><button class="text-button" data-action="import">Imate WinCatalog katalog? Uvezite ga <span>↗</span></button></div>
+            <div class="no-results" id="no-results" hidden><svg class="icon"><use href="#i-search"/></svg><h3>Nema rezultata za ovu pretragu.</h3><p>Pokušajte sa drugim nazivom ili uklonite filtere.</p><button class="button button-ghost" id="reset-filters">Očisti pretragu i filtere</button></div>
+            <div class="loading-state" id="loading-state" hidden><span class="spinner"></span><span>Pretražujem biblioteku…</span></div>
+            <footer class="table-footer" id="table-footer" hidden><span id="pagination-summary"></span><div><button class="icon-button" id="previous-page" aria-label="Prethodna stranica"><svg class="icon reversed"><use href="#i-chevron"/></svg></button><span id="page-number">1</span><button class="icon-button" id="next-page" aria-label="Sledeća stranica"><svg class="icon"><use href="#i-chevron"/></svg></button></div></footer>
+          </section>
+          <aside class="details-panel glass-panel" id="details-panel" aria-label="Detalji fajla" hidden></aside>
+        </div>
+        <div class="library-footnote"><span><i class="status-dot"></i>Arhiva dostupna i kada su mediji isključeni</span><span id="database-size">Katalog 0 B · Sadržaj 0 B</span></div>
+      </section>
+
+      <section class="view" id="view-sources" aria-labelledby="sources-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">SVAKI MEDIJ IMA SVOJE MESTO</p><h1 id="sources-title">Vaša <span>biblioteka.</span></h1><p class="page-subtitle">Računari, eksterni diskovi i arhive. Uvek na dohvat pretrage.</p></div></div>
+        <div class="section-title"><h2>Moji mediji <span id="source-card-count">0</span></h2><button class="button button-ghost" data-action="import"><svg class="icon"><use href="#i-upload"/></svg>Uvezi WinCatalog</button></div>
+        <div class="source-cards" id="source-cards"></div>
+      </section>
+
+      <section class="view" id="view-index" aria-labelledby="index-title" hidden>
+        <div class="page-heading"><div><p class="eyebrow">BIBLIOTEKA KOJA PAMTI</p><h1 id="index-title">Dodajte. <span>Pronađite.</span></h1><p class="page-subtitle">Indeksiranje se odvija lokalno. Originalni fajlovi ostaju na svom mestu.</p></div></div>
+        <section class="job-panel glass-panel" aria-live="polite"><div class="job-heading"><div class="job-icon"><svg class="icon"><use href="#i-sync"/></svg></div><div><h2 id="job-title">Spremno za indeksiranje</h2><p id="job-description">Dodajte medij ili osvežite postojeći katalog.</p></div><span class="job-status-badge" id="job-status-badge">Na čekanju</span></div><div class="job-progress" id="job-progress" hidden><span></span></div><div class="job-metrics"><div><span>Pregledano fajlova</span><strong id="job-scanned">0</strong></div><div><span>Obrađeno dokumenata</span><strong id="job-indexed">0</strong></div><div class="job-path"><span>Trenutni fajl</span><p id="job-current">—</p></div></div><p class="job-error" id="job-error" hidden></p><button class="button button-ghost" id="cancel-job" hidden>Zaustavi indeksiranje</button></section>
+        <div class="action-cards"><article class="action-card glass-panel"><span class="action-icon"><svg class="icon"><use href="#i-folder"/></svg></span><h2>Dodajte disk ili folder</h2><p>Sačuvajte nazive i putanje. Uključite i pretragu teksta iz PDF i Office dokumenata.</p><button class="button button-coral" data-action="add-source">Novi medij<svg class="icon"><use href="#i-plus"/></svg></button></article><article class="action-card glass-panel"><span class="action-icon"><svg class="icon"><use href="#i-upload"/></svg></span><h2>Nastavite svoj katalog</h2><p>Uvezite WinCatalog izvoz i sačuvajte pregled Blu-ray i drugih arhiva.</p><button class="button button-ghost" data-action="import">Uvezi katalog<svg class="icon"><use href="#i-arrow"/></svg></button></article><article class="action-card glass-panel"><span class="action-icon"><svg class="icon"><use href="#i-download"/></svg></span><h2>Ponesite biblioteku</h2><p>Napravite prenosivu kopiju kataloga. Bazu sadržaja možete uključiti po potrebi.</p><button class="button button-ghost" data-action="export">Spakuj za USB<svg class="icon"><use href="#i-arrow"/></svg></button></article></div>
+        <div class="storage-panel glass-panel"><div><svg class="icon"><use href="#i-shield"/></svg><h2>Dve baze. Vaš prostor.</h2></div><p>Nazivi i putanje su u <code>catalog.sqlite</code>, tekst dokumenata u <code>content.sqlite</code>. Za VeraCrypt pokrenite aplikaciju sa bazama u montiranom kontejneru i zatvorite je pre odmontiranja.</p><div class="storage-path"><span>Lokacija podataka</span><code id="data-dir">—</code></div></div>
+      </section>
+      <footer class="main-footer"><span>Manje traženja. Više prostora za važno.</span><span class="footer-wordmark">ALLFILES</span></footer>
+    </main>
+  </div>
+
+  <dialog id="source-dialog" class="modal"><form id="source-form"><header class="modal-header"><div><p class="eyebrow">PROŠIRITE BIBLIOTEKU</p><h2 id="source-dialog-title">Dodajte medij</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Zatvori"><svg class="icon"><use href="#i-close"/></svg></button></header><p class="modal-intro">Izaberite folder na ovom računaru. Katalog pamti fajlove i kada isključite medij.</p><input type="hidden" id="source-id"><label class="field-label" for="source-root">Putanja do foldera <span>*</span></label><div class="input-with-button"><input id="source-root" required placeholder="/run/media/korisnik/Arhiva"><button type="button" class="button button-ghost" id="browse-source">Izaberi</button></div><div class="form-row"><div><label class="field-label" for="source-label">Naziv medija <span>*</span></label><input id="source-label" required placeholder="Arhiva · eksterni SSD"></div><div><label class="field-label" for="source-kind">Tip medija</label><select id="source-kind"><option value="folder">Folder</option><option value="computer">Računar</option><option value="external">Eksterni disk</option><option value="bluray">Blu-ray / DVD</option><option value="lto">LTO kaseta</option></select></div></div><label class="field-label" for="source-location">Fizička lokacija <span class="optional">opciono</span></label><input id="source-location" placeholder="Kancelarija · polica 2"><label class="checkbox-card"><input type="checkbox" id="source-content" checked><span><strong>Indeksiraj sadržaj dokumenata</strong><small>Tekst iz PDF, Word, Excel i PowerPoint fajlova. Prvo skeniranje može potrajati.</small></span></label><p class="form-error" id="source-form-error" role="alert" hidden></p><footer class="modal-footer"><button type="button" class="button button-ghost" data-close-dialog>Odustani</button><button type="submit" class="button button-coral"><svg class="icon"><use href="#i-plus"/></svg>Pokreni indeksiranje</button></footer></form></dialog>
+
+  <dialog id="import-dialog" class="modal"><form id="import-form"><header class="modal-header"><div><p class="eyebrow">POSTOJEĆA ARHIVA</p><h2>Uvezi WinCatalog</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Zatvori"><svg class="icon"><use href="#i-close"/></svg></button></header><p class="modal-intro">Izvezite katalog iz WinCataloga, zatim unesite putanju do izvoza na ovom računaru. Podržani su CSV, TSV, EFU i prepoznati XML izveštaji.</p><label class="field-label" for="import-path">Putanja do izvoza <span>*</span></label><input id="import-path" required placeholder="/home/korisnik/WinCatalog.csv"><label class="field-label" for="import-label">Naziv arhive <span>*</span></label><input id="import-label" required placeholder="Blu-ray arhiva"><label class="field-label" for="import-location">Fizička lokacija</label><input id="import-location" placeholder="Kuća · ormar sa diskovima"><div class="info-note"><svg class="icon"><use href="#i-info"/></svg><span>Uvoz spiska fajlova ne dodaje sadržaj dokumenata. Za indeksiranje teksta potreban je pristup originalnim fajlovima.</span></div><p class="form-error" id="import-form-error" role="alert" hidden></p><footer class="modal-footer"><button type="button" class="button button-ghost" data-close-dialog>Odustani</button><button type="submit" class="button button-coral"><svg class="icon"><use href="#i-upload"/></svg>Uvezi katalog</button></footer></form></dialog>
+
+  <dialog id="export-dialog" class="modal"><form id="export-form"><header class="modal-header"><div><p class="eyebrow">BIBLIOTEKA ZA PONETI</p><h2>Spakuj za USB</h2></div><button type="button" class="icon-button" data-close-dialog aria-label="Zatvori"><svg class="icon"><use href="#i-close"/></svg></button></header><p class="modal-intro">Sačuvajte konzistentnu kopiju baza u novi folder. Izvršni fajl AllFiles za željeni operativni sistem kopirajte uz njih.</p><label class="field-label" for="export-destination">Novi odredišni folder <span>*</span></label><input id="export-destination" required placeholder="/run/media/korisnik/USB/AllFiles"><label class="checkbox-card"><input type="checkbox" id="export-content" checked><span><strong>Uključi bazu sadržaja dokumenata</strong><small>Isključite za manju kopiju sa pretragom naziva i putanja.</small></span></label><p class="form-error" id="export-form-error" role="alert" hidden></p><footer class="modal-footer"><button type="button" class="button button-ghost" data-close-dialog>Odustani</button><button type="submit" class="button button-coral"><svg class="icon"><use href="#i-download"/></svg>Napravi kopiju</button></footer></form></dialog>
+
+  <dialog id="browse-dialog" class="modal browse-modal"><header class="modal-header"><div><p class="eyebrow">LOKALNI FAJLOVI</p><h2>Izaberite folder</h2></div><button class="icon-button" data-close-dialog aria-label="Zatvori"><svg class="icon"><use href="#i-close"/></svg></button></header><form id="browse-form" class="browse-path-row"><label class="sr-only" for="browse-path">Putanja</label><input id="browse-path" placeholder="Putanja"><button class="button button-ghost" type="submit">Idi</button></form><div id="browse-entries" class="browse-entries"></div><p class="form-error" id="browse-error" role="alert" hidden></p><footer class="modal-footer"><button class="button button-ghost" data-close-dialog>Odustani</button><button class="button button-coral" id="choose-folder">Izaberi ovaj folder</button></footer></dialog>
+
+  <dialog id="shutdown-dialog" class="modal compact-modal"><header class="modal-header"><h2>Zatvoriti AllFiles?</h2><button class="icon-button" data-close-dialog aria-label="Zatvori"><svg class="icon"><use href="#i-close"/></svg></button></header><p class="modal-intro">Aplikacija će zatvoriti baze i zaustaviti lokalni servis. Sačekajte da se proces završi pre odmontiranja kontejnera.</p><footer class="modal-footer"><button class="button button-ghost" data-close-dialog>Odustani</button><button class="button button-coral" id="confirm-shutdown">Zatvori aplikaciju</button></footer></dialog>
+  <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="false"></div>
+</body>
+</html>
