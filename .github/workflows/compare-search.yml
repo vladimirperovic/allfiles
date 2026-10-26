@@ -10,9 +10,6 @@ jobs:
   compare:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      ALLFILES_COMPARE_DIR: ${{ runner.temp }}/allfiles-comparison
-      CARGO_TARGET_DIR: ${{ runner.temp }}/rust-search-target
     steps:
       - uses: actions/checkout@v7
         with:
@@ -23,6 +20,10 @@ jobs:
           cache-dependency-path: |
             go.sum
             experiments/go-search/go.sum
+      - name: Configure temporary directories
+        run: |
+          printf 'ALLFILES_COMPARE_DIR=%s/allfiles-comparison\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'CARGO_TARGET_DIR=%s/rust-search-target\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
       - name: Build one verified synthetic catalog and workload manifest
         run: go test -run '^TestBuildComparisonFixture$' -count=1 -v .
       - name: Build the identical native SQLite engine
