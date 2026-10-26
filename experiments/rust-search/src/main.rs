@@ -238,6 +238,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn linked_engine_is_the_pinned_native_sqlite_with_fts5() -> Result<()> {
+        let connection = Connection::open_in_memory()?;
+        let version: String = connection.query_row("SELECT sqlite_version()", [], |row| row.get(0))?;
+        assert_eq!(version, SQLITE_VERSION, "the build linked an unexpected SQLite library");
+        let fts5: i64 = connection.query_row("SELECT sqlite_compileoption_used('ENABLE_FTS5')", [], |row| row.get(0))?;
+        assert_eq!(fts5, 1, "the pinned engine requires FTS5");
+        Ok(())
+    }
+
+    #[test]
     fn summary_uses_even_median_and_nearest_rank_p95() {
         assert_eq!(summarize(vec![4.0, 1.0, 3.0, 2.0]), (2.5, 4.0, 1.0));
         assert_eq!(summarize((1..=20).map(f64::from).collect()), (10.5, 19.0, 1.0));

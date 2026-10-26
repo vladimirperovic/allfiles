@@ -45,7 +45,9 @@ def main():
                 rss_path = Path(temp) / 'rss-kib.txt'
                 # GNU time reports this individual process's peak RSS, not an
                 # accumulated maximum over all earlier child processes.
-                result = subprocess.run(['/usr/bin/time', '-f', '%M', '-o', str(rss_path), *args], capture_output=True, text=True, check=True)
+                result = subprocess.run(['/usr/bin/time', '-f', '%M', '-o', str(rss_path), *args], capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(f'{name} exited {result.returncode}:\n{result.stderr.strip()}')
                 payload = json.loads(result.stdout)
                 if payload['implementation'] != name or payload['iterations'] != options.iterations or payload['warmup'] != 3:
                     raise ValueError(f'{name}: incorrect executable or sampling configuration')

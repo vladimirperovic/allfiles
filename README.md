@@ -99,6 +99,8 @@ WinCatalog izvoz možeš dodati kasnije. Za početak koristi CSV izvoz; uvoznik 
 
 **Uvoz konkretnog WinCatalog kataloga još treba proveriti na tvom izvozu.** Verzije programa i strukture izvoza se razlikuju. Uvoz nije obećanje podrške za svaki CSV/XML ili direktno za WinCatalog radni fajl. Ako izvoz ne sadrži izdvojeni tekst dokumenata, uvoz ne može napraviti pretragu njihovog sadržaja bez pristupa originalima. Sačuvaj originalni katalog.
 
+Uvoz ograničava ukupan izvoz na 2 GiB, CSV zaglavlje na 64 KiB, zapis/XML token na 4 MiB i broj kolona/polja na 256. U memoriji čeka najviše 4.096 zapisa ukupno, i kada izvoz sadrži mnogo medija. Birač foldera prikazuje do 2.000 podfoldera uz poruku ako ih ima još; tada možeš uneti punu putanju ručno.
+
 ## Pretraga i prenos
 
 Interfejs razdvaja pretragu naziva/putanje od pretrage sadržaja. Filteri pomažu da suziš rezultate prema mediju i tipu fajla. Rezultat pokazuje gde se fajl nalazi; za sam dokument moraš priključiti odgovarajući medij.
@@ -283,9 +285,28 @@ Opciona verzija: `sh scripts/build.sh 0.2.0` ili `.\scripts\build.ps1 -Version 0
 
 GitHub Actions pokreće testove na Linuxu, Windowsu i macOS-u, a zatim uvek gradi i pakuje ovih pet izvršnih fajlova sa `CGO_ENABLED=0`. Čuvanje Actions artifact-a je opciono: pri ručnom pokretanju workflow-a uključi `upload_artifacts` (podrazumevano isključeno). Tako se testovi i build ne oslanjaju na raspoloživu kvotu za čuvanje artifact-a. Uključeni artifact-i sadrže arhivu programa, README i SHA-256 kontrolni zbir i čuvaju se 30 dana. Arhive za preuzimanje objavljuju se zasebno kroz GitHub Releases; workflow ih ne objavljuje automatski. Build ne uključuje tvoje kataloge. Baze, lokalni izvozi, browser profili i privremeni fajlovi izuzeti su preko `.gitignore`; lične fajlove ne dodaj ručno u Git.
 
-## Granice prve verzije
+## Analiza performansi i preostala poboljšanja
 
-Probno merenje na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
+Pregled i optimizacija u **0.2.0** uklonili su ponovno sabiranje svih fajlova pri osvežavanju statusa, ponovljeno raspakivanje istog dokumenta po rezultatu i korelisani podupit koji je pretragu sadržaja ponavljao za svaki fajl. Brojači se menjaju u istoj transakciji kao podaci; postojeći katalozi se sabiraju jednom pri prvoj nadogradnji. Preview i MCP sada prenose samo traženi deo teksta. Uvoz metapodataka ne pravi poseban dodatni upis za svaki PDF/Office fajl.
+
+Upareno sintetičko merenje na istom Windows računaru, Go 1.26.10, oko 100.000 fajlova, sa zagrejanim kešom:
+
+| Operacija | Pre optimizacije | Posle |
+|---|---:|---:|
+| Statistika kataloga | 29,72 ms | 0,169 ms |
+| Prva stranica bez upita | 27,28 ms | 0,202 ms |
+| Čest pojam u nazivu (`drawing`) | 644,28 ms | 341,33 ms |
+| Sadržaj: 50 lokacija istog dokumenta od oko 1 MiB | 1.078,82 ms | 6,92 ms |
+| Ukupne memorijske alokacije prethodne pretrage | 724 MiB | 4,41 MiB |
+| Uvoz 10.000 PDF stavki, samo metapodaci | 65,95 s | 0,875 s |
+
+Poslednji red meri zaseban CSV izvoz, ne čitanje teksta iz 10.000 PDF dokumenata. Alokacije nisu vršna zauzetost RAM-a. Ovo su konkretni probni skupovi, ne garancija za stvarnu arhivu. `review_benchmark_test.go` sadrži eksplicitne benchmarkove koji se ne pokreću u redovnim testovima.
+
+Preostala poboljšanja: paginacija kursorom za duboke stranice, jeftiniji ukupan broj rezultata za veoma široke upite, zaseban radni proces sa granicom vremena/memorije za nepouzdane PDF-ove i izvoz sa napretkom/otkazivanjem. PDF biblioteka može obraditi celu jednu stranicu pre provere našeg limita, pa granice ulaza/izdvojenog teksta nisu stroga izolacija parsera. Osnovna aplikacija je i dalje namenjena lokalnom radu; objava na javnom serveru zahteva posebno rešenu autentifikaciju i HTTPS.
+
+Izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
+
+Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
 
 Šifrovana kopija istog probnog kataloga dala je takođe **2,0–2,1 ms** za ove upite u 30 ponavljanja sa zagrejanim kešom. Ovo ne meri prvo otključavanje, čitanje sa hladnog diska ili trošak skeniranja i upisa. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkEncryptedCatalog100K -benchtime 30x -count 1`.
 
