@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 const mcpModernVersion = "2026-07-28"
@@ -632,25 +633,22 @@ func (b *mcpBridge) callTool(ctx context.Context, name string, raw json.RawMessa
 		if err != nil {
 			return nil, err
 		}
-		var result struct {
-			File       FileResult `json:"file"`
-			Text       string     `json:"text"`
-			TextStatus string     `json:"text_status"`
-			TextDetail string     `json:"text_detail"`
-		}
-		if err := b.api(ctx, "GET", "/api/file?id="+strconv.FormatInt(args.ID, 10), nil, &result, 64<<20); err != nil {
+		var result filePageResponse
+		query := url.Values{"id": {strconv.FormatInt(args.ID, 10)}, "text_offset": {strconv.Itoa(offset)}, "max_chars": {strconv.Itoa(limit)}}
+		if err := b.api(ctx, "GET", "/api/file?"+query.Encode(), nil, &result, 2<<20); err != nil {
 			return nil, err
 		}
-		runes := []rune(result.Text)
-		start := offset
-		if start > len(runes) {
-			start = len(runes)
+		// An older running AllFiles server can ignore pagination parameters.
+		// Never pass its complete document to the AI client as a bounded page.
+		count := utf8.RuneCountInString(result.Text)
+		if result.Offset != offset || count > limit || result.ReturnedChars != count {
+			return nil, errors.New("AllFiles returned an invalid text page; restart the application with the current version")
 		}
-		end := start + limit
-		if end > len(runes) {
-			end = len(runes)
+		page := map[string]any{"file": result.File, "text": result.Text, "text_status": result.TextStatus, "text_detail": result.TextDetail, "offset": result.Offset, "returned_chars": result.ReturnedChars, "has_more": result.HasMore}
+		if result.TotalChars != nil {
+			page["total_chars"] = *result.TotalChars
 		}
-		return map[string]any{"file": result.File, "text": string(runes[start:end]), "text_status": result.TextStatus, "text_detail": result.TextDetail, "offset": offset, "returned_chars": end - start, "total_chars": len(runes), "has_more": end < len(runes)}, nil
+		return page, nil
 	}
 	return nil, errors.New("Unknown tool")
 }

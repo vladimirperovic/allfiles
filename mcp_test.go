@@ -344,6 +344,50 @@ func TestMCPCancellationInterruptsInFlightProxyRequest(t *testing.T) {
 	}
 }
 
+func TestMCPFileRequestsBoundedTextAtServer(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		q := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/api/file" || q.Get("id") != "42" || q.Get("text_offset") != "123" || q.Get("max_chars") != "0" {
+			http.Error(w, "file text was not bounded at the API", http.StatusBadRequest)
+			return
+		}
+		jsonReply(w, 200, map[string]any{"file": map[string]any{"id": 42}, "text": "", "text_status": "indexed", "offset": 123, "returned_chars": 0, "has_more": true})
+	}))
+	defer server.Close()
+	b, err := newMCPBridge(server.URL, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.client.CloseIdleConnections()
+	result, err := b.callTool(context.Background(), "allfiles_file", json.RawMessage(`{"id":42,"offset":123,"max_chars":0}`))
+	if err != nil || requests.Load() != 1 || result["text"] != "" || result["offset"] != 123 || result["has_more"] != true {
+		t.Fatalf("metadata-only request: %#v %v, requests=%d", result, err, requests.Load())
+	}
+	if _, present := result["total_chars"]; present {
+		t.Fatal("metadata-only request invented a total character count")
+	}
+}
+
+func TestMCPFileRejectsUnboundedLegacyServerResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonReply(w, 200, map[string]any{"file": map[string]any{"id": 42}, "text": strings.Repeat("private document ", 100), "text_status": "indexed"})
+	}))
+	defer server.Close()
+	b, err := newMCPBridge(server.URL, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.client.CloseIdleConnections()
+	for _, raw := range []string{`{"id":42,"max_chars":10}`, `{"id":42,"max_chars":0}`} {
+		result, err := b.callTool(context.Background(), "allfiles_file", json.RawMessage(raw))
+		if err == nil || result != nil {
+			t.Fatalf("unbounded private text from old server was forwarded: %#v %v", result, err)
+		}
+	}
+}
+
 func TestMCPRejectsMalformedProtocolAndBoundsInput(t *testing.T) {
 	h := startMCPHarness(t, "http://127.0.0.1:1")
 	if _, err := io.WriteString(h.input, "{broken\n"); err != nil {

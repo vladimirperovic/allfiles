@@ -35,6 +35,9 @@ jobs:
           cache-dependency-path: go.sum
       - run: go vet ./...
       - run: go test ./...
+      - name: Check reachable dependency vulnerabilities
+        if: runner.os == 'Linux'
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
@@ -80,10 +83,11 @@ jobs:
         shell: bash
         run: |
           cp README.md dist/README.md
+          cp README.en.md dist/README.en.md
           cp THIRD_PARTY_NOTICES.txt dist/THIRD_PARTY_NOTICES.txt
           cd dist
           sha256sum "allfiles-${GOOS}-${GOARCH}${{ matrix.extension }}" > SHA256SUMS
-          tar -czf "allfiles-${GOOS}-${GOARCH}.tar.gz" "allfiles-${GOOS}-${GOARCH}${{ matrix.extension }}" README.md THIRD_PARTY_NOTICES.txt SHA256SUMS
+          tar -czf "allfiles-${GOOS}-${GOARCH}.tar.gz" "allfiles-${GOOS}-${GOARCH}${{ matrix.extension }}" README.md README.en.md THIRD_PARTY_NOTICES.txt SHA256SUMS
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch' && inputs.upload_artifacts
         with:

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ncruces/go-sqlite3/vfs"
 )
@@ -169,6 +170,10 @@ func OpenStoreWithPassword(dir string, password []byte) (*Store, error) {
 	}
 	err = conn.QueryRowContext(context.Background(), `SELECT value FROM meta WHERE key='catalog_id'`).Scan(&s.catalogID)
 	if err != nil {
+		s.Close()
+		return nil, err
+	}
+	if err = s.initStats(); err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -560,14 +565,18 @@ func (s *Store) SourcesPage(id string, offset, limit int) ([]Source, int64, erro
 func (s *Store) Stats() (map[string]any, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkDataDir(); err != nil {
+		return nil, err
+	}
 	var count, total, docs, src int64
 	var demo string
-	e := s.conn.QueryRowContext(context.Background(), `SELECT COUNT(*),COALESCE(SUM(size),0),COALESCE(SUM(text_status IN('indexed','truncated')),0) FROM files`).Scan(&count, &total, &docs)
+	e := s.conn.QueryRowContext(context.Background(), `SELECT files,bytes,documents,sources FROM catalog_stats WHERE id=1`).Scan(&count, &total, &docs, &src)
 	if e != nil {
 		return nil, e
 	}
-	s.conn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM sources`).Scan(&src)
-	s.conn.QueryRowContext(context.Background(), `SELECT value FROM meta WHERE key='demo'`).Scan(&demo)
+	if e = s.conn.QueryRowContext(context.Background(), `SELECT value FROM meta WHERE key='demo'`).Scan(&demo); e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return nil, e
+	}
 	size := func(name string) int64 {
 		v, e := os.Stat(filepath.Join(s.DataDir, name))
 		if e != nil {
@@ -642,6 +651,9 @@ func (s *Store) Search(ctx context.Context, o SearchOptions) (SearchResult, erro
 	start := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkDataDir(); err != nil {
+		return SearchResult{}, err
+	}
 	if o.Limit <= 0 || o.Limit > 200 {
 		o.Limit = 100
 	}
@@ -671,7 +683,7 @@ func (s *Store) Search(ctx context.Context, o SearchOptions) (SearchResult, erro
 	nameArgs := []any{}
 	for _, term := range strings.Fields(strings.ReplaceAll(q, `"`, "")) {
 		g := "*" + globLiteral(fold(term)) + "*"
-		names = append(names, `(f.id IN(SELECT rowid FROM names WHERE search_name GLOB ?) OR f.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))`)
+		names = append(names, `f.id IN(SELECT rowid FROM names WHERE search_name GLOB ? UNION SELECT pf.id FROM files pf WHERE pf.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))`)
 		nameArgs = append(nameArgs, g, g)
 	}
 	nameSQL := "1=1"
@@ -686,9 +698,11 @@ func (s *Store) Search(ctx context.Context, o SearchOptions) (SearchResult, erro
 			return out, e
 		}
 		if e == nil {
-			contentSQL = `f.id IN(SELECT l.file_id FROM content.links l WHERE l.version=f.version)`
+			// Keep the version check inside the candidate query. Correlating it
+			// to the outer f row makes SQLite repeat it for every catalog file.
+			contentSQL = `f.id IN(SELECT l.file_id FROM content.links l JOIN files cf ON cf.id=l.file_id AND cf.version=l.version)`
 			if tq := textQuery(q); tq != "" {
-				contentSQL = `f.id IN(SELECT l.file_id FROM content.links l WHERE l.version=f.version AND l.doc_id IN(SELECT rowid FROM content.fts WHERE fts MATCH ?))`
+				contentSQL = `f.id IN(SELECT l.file_id FROM content.links l JOIN files cf ON cf.id=l.file_id AND cf.version=l.version WHERE l.doc_id IN(SELECT rowid FROM content.fts WHERE fts MATCH ?))`
 				contentArgs = append(contentArgs, tq)
 			}
 		}
@@ -706,7 +720,13 @@ func (s *Store) Search(ctx context.Context, o SearchOptions) (SearchResult, erro
 		args = append(args, contentArgs...)
 	}
 	condition := " WHERE " + strings.Join(where, " AND ")
-	if e := s.conn.QueryRowContext(ctx, `SELECT COUNT(*)`+resultFrom+condition, args...).Scan(&out.Total); e != nil {
+	countSQL := `SELECT COUNT(*) FROM files f` + condition
+	countArgs := args
+	if o.Source == "" && o.Extension == "" && nameSQL == "1=1" && mode != "content" {
+		countSQL = `SELECT files FROM catalog_stats WHERE id=1`
+		countArgs = nil
+	}
+	if e := s.conn.QueryRowContext(ctx, countSQL, countArgs...).Scan(&out.Total); e != nil {
 		return out, e
 	}
 	sortSQL := "f.search_name,f.id"
@@ -735,27 +755,50 @@ func (s *Store) Search(ctx context.Context, o SearchOptions) (SearchResult, erro
 		return out, e
 	}
 	if mode != "files" && s.attached {
+		// Multiple files can share one compressed document. Build its preview
+		// once per result page, then discard the small cache after the request.
+		snippets := make(map[int64]string)
 		for i := range out.Results {
+			if err := ctx.Err(); err != nil {
+				return out, err
+			}
 			if out.Results[i].TextStatus == "indexed" || out.Results[i].TextStatus == "truncated" {
+				var docID int64
+				err := s.conn.QueryRowContext(ctx, `SELECT l.doc_id FROM content.links l JOIN files f ON f.id=l.file_id WHERE f.id=? AND f.version=l.version`, out.Results[i].ID).Scan(&docID)
+				if err != nil {
+					continue
+				}
+				if preview, ok := snippets[docID]; ok {
+					out.Results[i].Snippet = preview
+					continue
+				}
 				txt, e := s.textLocked(ctx, out.Results[i].ID)
 				if e == nil {
-					out.Results[i].Snippet = snippet(txt, q)
+					preview := snippet(txt, q)
+					snippets[docID] = preview
+					out.Results[i].Snippet = preview
 				}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
 	}
 	out.ElapsedMS = float64(time.Since(start).Microseconds()) / 1000
 	return out, nil
 }
 func snippet(text, q string) string {
-	r := []rune(text)
 	idx := 0
-	lower := []rune(strings.ToLower(text))
-	for _, term := range strings.Fields(strings.ReplaceAll(q, `"`, "")) {
-		pos := strings.Index(string(lower), strings.ToLower(term))
-		if pos >= 0 {
-			idx = len([]rune(string(lower)[:pos]))
-			break
+	terms := strings.Fields(strings.ReplaceAll(q, `"`, ""))
+	if len(terms) > 0 {
+		lower := strings.ToLower(text)
+		for _, term := range terms {
+			if pos := strings.Index(lower, strings.ToLower(term)); pos >= 0 {
+				// Case conversion may change UTF-8 byte lengths (e.g. K → k),
+				// so locate the excerpt by rune count, not the lowercased offset.
+				idx = utf8.RuneCountInString(lower[:pos])
+				break
+			}
 		}
 	}
 	a := idx - 90
@@ -763,17 +806,25 @@ func snippet(text, q string) string {
 		a = 0
 	}
 	b := idx + 200
-	if b > len(r) {
-		b = len(r)
+	start, end, n := 0, len(text), 0
+	for offset := range text {
+		if n == a {
+			start = offset
+		}
+		if n == b {
+			end = offset
+			break
+		}
+		n++
 	}
 	prefix, suffix := "", ""
 	if a > 0 {
 		prefix = "…"
 	}
-	if b < len(r) {
+	if end < len(text) {
 		suffix = "…"
 	}
-	return prefix + strings.Join(strings.Fields(string(r[a:b])), " ") + suffix
+	return prefix + strings.Join(strings.Fields(text[start:end]), " ") + suffix
 }
 func (s *Store) textLocked(ctx context.Context, id int64) (string, error) {
 	var data []byte

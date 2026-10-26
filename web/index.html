@@ -7,6 +7,7 @@
   <title>AllFiles — Sve na jednom mestu</title>
   <link rel="icon" href="/logo.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
+  <script src="/i18n.js" defer></script>
   <script src="/app.js" defer></script>
   <script src="/particles.js" defer></script>
 </head>
@@ -66,7 +67,7 @@
       <canvas id="ambient-particles" aria-hidden="true"></canvas>
       <header class="topbar">
         <div class="breadcrumb"><span>Biblioteka</span><svg class="icon small"><use href="#i-chevron"/></svg><strong id="breadcrumb-current">Pretraga</strong></div>
-        <div class="topbar-actions"><span class="connection-pill" id="connection-status"><i></i>Lokalni prostor</span><span class="encryption-pill" id="encryption-status" role="status" aria-label="Katalog je šifrovan i otključan u ovoj sesiji" title="Katalog je šifrovan i otključan u ovoj sesiji" hidden><svg class="icon"><use href="#i-shield"/></svg><span>Šifrovano · otključano</span></span><span class="database-pill" id="database-size-badge" aria-label="Učitavanje veličine baze">Baza —</span><button id="motion-toggle" type="button" class="button button-ghost motion-toggle" title="Isključi animaciju tačkica" aria-label="Isključi animaciju tačkica" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-motion"/></svg><span>Animacija</span></button><button class="button button-coral" data-action="add-source"><svg class="icon"><use href="#i-plus"/></svg><span>Dodaj medij</span></button></div>
+        <div class="topbar-actions"><span class="connection-pill" id="connection-status"><i></i>Lokalni prostor</span><span class="encryption-pill" id="encryption-status" role="status" aria-label="Katalog je šifrovan i otključan u ovoj sesiji" title="Katalog je šifrovan i otključan u ovoj sesiji" hidden><svg class="icon"><use href="#i-shield"/></svg><span>Šifrovano · otključano</span></span><span class="database-pill" id="database-size-badge" aria-label="Učitavanje veličine baze">Baza —</span><button id="language-toggle" type="button" class="button button-ghost language-toggle" title="Switch to English" aria-label="Switch to English" lang="en">EN</button><button id="motion-toggle" type="button" class="button button-ghost motion-toggle" title="Isključi animaciju tačkica" aria-label="Isključi animaciju tačkica" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="#i-motion"/></svg><span>Animacija</span></button><button class="button button-coral" data-action="add-source"><svg class="icon"><use href="#i-plus"/></svg><span>Dodaj medij</span></button></div>
       </header>
       <div class="connection-error" id="connection-error" role="alert" hidden></div>
 

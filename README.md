@@ -1,5 +1,7 @@
 # AllFiles
 
+Srpski · [English](README.en.md)
+
 Prenosivi katalog svih tvojih fajlova: računari, eksterni diskovi, Blu-ray diskovi i LTO kasete. Jedan program otvara lokalni web interfejs, sa gradijentima, providnim panelima i čitljivim tabelama. Katalog možeš pretraživati i kada izvorni disk nije priključen.
 
 AllFiles je namenjen prvenstveno lokalnom radu na Omarchy Linuxu, sa bazama unutar otključanog VeraCrypt kontejnera. Postoje i Windows i macOS verzije. Nema pretplate, obaveznog udaljenog servera ni ugrađenog AI modela. Sam program ne šalje dokumente u cloud. Za korišćenje gotovog programa ne instaliraš Go, Node, Python ni poseban SQLite server.
@@ -103,6 +105,8 @@ Interfejs razdvaja pretragu naziva/putanje od pretrage sadržaja. Filteri pomaž
 
 Interfejs koristi jedinstven tamni **Grafit** izgled, sa belim slovima i sitnim crvenim akcentima. Svaki red tabele ima neprekinut gradijent preko cele širine. Naziv fajla i njegov folder imaju zasebne redove, a lista se pomera unutar tabele.
 
+Dugme **EN / SR** menja jezik interfejsa bez ponovnog učitavanja stranice i pamti izbor u tom browseru. Prevode se oznake, dijalozi i formati brojeva/datuma; nazivi medija, putanje i sadržaj dokumenata ostaju doslovno tvoji. Poruke terminala i proizvoljne sistemske dijagnostike mogu ostati na izvornom jeziku. Pregled dokumenta dobija do 10.000 znakova, dok pretraga koristi ceo indeksirani tekst.
+
 Katanac iznad statistike pokazuje da li je trenutna baza šifrovana. Diskretne tačkice u pozadini struje poput vetra i reaguju na miš. Dugme **Animacija**, pored „Dodaj medij”, zaustavlja/pokreće kretanje i pamti izbor samo u tom browseru. Efekat koristi najviše 600 tačkica (180 na uskom ekranu), 30 iscrtavanja u sekundi i ograničenu rezoluciju platna. U skrivenom tabu, van vidljivog dela stranice i uz sistemsko smanjeno kretanje animacija miruje. Nema dodatnih biblioteka ni mrežnih zahteva.
 
 Za konzistentnu kopiju podataka koristi izvoz kada nema aktivnog skeniranja ili uvoza:
@@ -203,6 +207,8 @@ Skeniranje zahteva da je izvorni folder dostupan računaru na kome radi servis. 
 
 `allfiles_scan` odmah vraća pokrenuti posao; napredak se proverava preko `allfiles_status`. Za skeniranje samo naziva i metapodataka koristi `index_content: false`. MCP most prihvata samo adresu `http://127.0.0.1:<port>` lokalnog servisa.
 
+`allfiles_file` sa `max_chars: 0` vraća samo metapodatke bez čitanja teksta i bez polja `total_chars`. Pozitivna veličina stranice vraća ograničen deo teksta sa ukupnim brojem znakova. MCP i lokalni servis treba ažurirati zajedno.
+
 **Lokalna baza ne znači da razgovor sa cloud modelom ostaje lokalan.** AI klijent prosleđuje svom modelu rezultate koje zatraži, što može uključiti nazive, putanje i izdvojeni tekst dokumenata. Za potpuno lokalnu upotrebu poveži klijent i model koji rade lokalno, bez prosleđivanja tih rezultata udaljenom pružaocu usluge.
 
 ## VeraCrypt i privatnost
@@ -243,7 +249,7 @@ Nemoj koristiti demo direktorijum kao svoj pravi katalog. `demo` dodaje sinteti�
 
 ## Razvoj i build
 
-Potreban je Go iz verzije navedene u `go.mod` (1.26 ili noviji kompatibilni alat). Prva izgradnja preuzima Go zavisnosti. Gotov program radi bez interneta.
+Potreban je Go iz verzije navedene u `go.mod` (1.26.10 ili noviji kompatibilni alat). Prva izgradnja preuzima Go zavisnosti. Gotov program radi bez interneta.
 
 ```bash
 go test ./...
@@ -265,7 +271,7 @@ Ili iz PowerShella:
 .\scripts\build.ps1
 ```
 
-Opciona verzija: `sh scripts/build.sh 0.1.0` ili `.\scripts\build.ps1 -Version 0.1.0`. Rezultati se nalaze u `dist/`:
+Opciona verzija: `sh scripts/build.sh 0.2.0` ili `.\scripts\build.ps1 -Version 0.2.0`. Rezultati se nalaze u `dist/`:
 
 | Fajl | Platforma |
 |---|---|

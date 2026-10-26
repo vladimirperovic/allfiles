@@ -19,7 +19,14 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf16"
+	"unicode/utf8"
 )
+
+const maxImportPending = 4096
+const maxCSVRecordBytes = 4 << 20
+const maxCSVHeaderBytes = 64 << 10
+const maxImportColumns = 256
+const maxImportXMLTokenBytes = 4 << 20
 
 type ImportOptions struct {
 	Path     string `json:"path"`
@@ -117,6 +124,7 @@ func Import(ctx context.Context, store *Store, opts ImportOptions, report func(P
 	digest := sha256.Sum256([]byte(filepath.Clean(abs)))
 	root := "import://" + hex.EncodeToString(digest[:16])
 	groups := map[string]*importBatch{}
+	pending := 0
 	complete := false
 	defer func() {
 		for _, group := range groups {
@@ -142,19 +150,17 @@ func Import(ctx context.Context, store *Store, opts ImportOptions, report func(P
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		items, err := store.UpsertFiles(group.Source.ID, state.ID, group.Entries)
+		// UpsertFiles already marks fresh/changed documents as not_indexed.
+		// Repeating that status in one durable transaction per file makes a
+		// metadata-only document export much slower than an ordinary file list.
+		_, err := store.UpsertFiles(group.Source.ID, state.ID, group.Entries)
 		if err != nil {
 			return err
 		}
-		for _, item := range items {
-			if item.NeedsText {
-				if err := store.RecordContent(item.ID, item.Version, "not_indexed", "", "Only catalog metadata was imported. Scan the original media to index document contents."); err != nil {
-					return err
-				}
-			}
-		}
 		state.Scanned += int64(len(group.Entries))
-		group.Entries = group.Entries[:0]
+		pending -= len(group.Entries)
+		// Release path strings and backing slices for sparse/interleaved media.
+		group.Entries = nil
 		emit()
 		return nil
 	}
@@ -180,13 +186,21 @@ func Import(ctx context.Context, store *Store, opts ImportOptions, report func(P
 			if err != nil {
 				return err
 			}
-			group = &importBatch{Source: source, Entries: make([]ScannedFile, 0, 256)}
+			group = &importBatch{Source: source}
 			groups[groupKey] = group
 		}
 		group.Entries = append(group.Entries, record.File)
+		pending++
 		state.Current = record.File.Relative
-		if len(group.Entries) == cap(group.Entries) {
+		if len(group.Entries) >= 256 {
 			return flush(group)
+		}
+		if pending >= maxImportPending {
+			for _, buffered := range groups {
+				if err := flush(buffered); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
@@ -233,43 +247,48 @@ func decodedExport(input io.Reader) (io.Reader, error) {
 }
 
 type utf16Reader struct {
-	reader  io.Reader
-	order   binary.ByteOrder
-	pending []byte
-	err     error
+	reader     io.Reader
+	order      binary.ByteOrder
+	pair       [2]byte
+	pending    [utf8.UTFMax]byte
+	start, end int
+	err        error
 }
 
 func (r *utf16Reader) Read(out []byte) (int, error) {
 	if len(out) == 0 {
 		return 0, nil
 	}
-	for len(r.pending) == 0 && r.err == nil {
-		var pair [2]byte
-		_, err := io.ReadFull(r.reader, pair[:])
+	for r.start == r.end && r.err == nil {
+		_, err := io.ReadFull(r.reader, r.pair[:])
 		if err != nil {
 			r.err = err
 			break
 		}
-		unit := r.order.Uint16(pair[:])
+		unit := r.order.Uint16(r.pair[:])
 		value := rune(unit)
 		if unit >= 0xd800 && unit <= 0xdbff {
-			_, err = io.ReadFull(r.reader, pair[:])
+			_, err = io.ReadFull(r.reader, r.pair[:])
 			if err != nil {
 				r.err = errors.New("truncated UTF-16 surrogate pair")
 				break
 			}
-			low := r.order.Uint16(pair[:])
+			low := r.order.Uint16(r.pair[:])
 			if low < 0xdc00 || low > 0xdfff {
 				r.err = errors.New("invalid UTF-16 surrogate pair")
 				break
 			}
 			value = utf16.DecodeRune(rune(unit), rune(low))
+		} else if unit >= 0xdc00 && unit <= 0xdfff {
+			r.err = errors.New("invalid UTF-16 surrogate pair")
+			break
 		}
-		r.pending = []byte(string(value))
+		r.start = 0
+		r.end = utf8.EncodeRune(r.pending[:], value)
 	}
-	if len(r.pending) > 0 {
-		n := copy(out, r.pending)
-		r.pending = r.pending[n:]
+	if r.start < r.end {
+		n := copy(out, r.pending[r.start:r.end])
+		r.start += n
 		return n, nil
 	}
 	return 0, r.err
@@ -292,11 +311,78 @@ func firstField(fields map[string]string, keys ...string) string {
 	return ""
 }
 
+// encoding/csv otherwise allocates an entire quoted record before callers can
+// inspect its fields. Bound bytes and columns while respecting quoted newlines
+// and doubled quotes, without duplicating the CSV parser's syntax validation.
+type csvRecordReader struct {
+	reader                io.Reader
+	ctx                   context.Context
+	delimiter             byte
+	limit, bytes, columns int
+	quoted                bool
+}
+
+func (r *csvRecordReader) Read(out []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := r.reader.Read(out)
+	for i, value := range out[:n] {
+		r.bytes++
+		if r.bytes > r.limit {
+			return i, errors.New("CSV record exceeds byte limit")
+		}
+		if value == '"' {
+			r.quoted = !r.quoted
+		}
+		if !r.quoted {
+			if value == '\n' {
+				r.bytes = 0
+				r.columns = 0
+			}
+			if value == r.delimiter {
+				r.columns++
+				if r.columns >= maxImportColumns {
+					return i, errors.New("CSV record exceeds column limit")
+				}
+			}
+		}
+	}
+	return n, err
+}
+
+// XML tokens can also grow before Decoder.Token returns. Its InputOffset lets
+// us cap bytes ahead of the last completed token, including parser read-ahead.
+type xmlTokenReader struct {
+	reader      io.Reader
+	ctx         context.Context
+	read, limit int64
+}
+
+func (r *xmlTokenReader) Read(out []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	remaining := r.limit - r.read
+	if remaining <= 0 {
+		return 0, errors.New("XML token exceeds 4 MiB limit")
+	}
+	if int64(len(out)) > remaining {
+		out = out[:remaining]
+	}
+	n, err := r.reader.Read(out)
+	r.read += int64(n)
+	return n, err
+}
+
 func parseCSVExport(ctx context.Context, input io.Reader, emit func(importRecord) error) error {
 	reader := bufio.NewReader(input)
 	prefix, _ := reader.Peek(8192)
 	line := strings.SplitN(string(prefix), "\n", 2)[0]
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "sep=") {
+		if len(strings.TrimSpace(line)) != 5 {
+			return errors.New("invalid CSV separator directive; limit is one separator")
+		}
 		_, _ = reader.ReadString('\n')
 		prefix, _ = reader.Peek(8192)
 		line = strings.SplitN(string(prefix), "\n", 2)[0]
@@ -312,7 +398,8 @@ func parseCSVExport(ctx context.Context, input io.Reader, emit func(importRecord
 			comma = delimiter
 		}
 	}
-	parser := csv.NewReader(reader)
+	bounded := &csvRecordReader{reader: reader, ctx: ctx, delimiter: byte(comma), limit: maxCSVHeaderBytes}
+	parser := csv.NewReader(bounded)
 	parser.Comma = comma
 	parser.FieldsPerRecord = -1
 	parser.TrimLeadingSpace = true
@@ -320,6 +407,7 @@ func parseCSVExport(ctx context.Context, input io.Reader, emit func(importRecord
 	if err != nil {
 		return fmt.Errorf("read CSV header: %w", err)
 	}
+	bounded.limit = maxCSVRecordBytes
 	known := map[string]bool{}
 	for i := range headers {
 		headers[i] = normalizeHeader(headers[i])
@@ -393,7 +481,9 @@ func recordFromFields(fields map[string]string) (importRecord, bool, error) {
 	if len(full) > 32768 {
 		return importRecord{}, false, errors.New("file path is longer than 32768 bytes")
 	}
-	full = path.Clean(full)
+	// CSV fields share one backing string for the whole record. Keep only the
+	// path instead of retaining unrelated large description/comment columns.
+	full = strings.Clone(path.Clean(full))
 	name = path.Base(full)
 	if full == "." || name == ".." || name == "/" {
 		return importRecord{}, true, nil
@@ -421,7 +511,10 @@ func recordFromFields(fields map[string]string) (importRecord, bool, error) {
 		media += serial
 	}
 	location := firstField(fields, "physicallocation", "location")
-	return importRecord{File: ScannedFile{Relative: full, Name: name, Dir: dir, Extension: strings.ToLower(strings.TrimPrefix(path.Ext(name), ".")), Size: size, Modified: modified, ModifiedNS: modifiedNS}, Media: media, Location: location}, false, nil
+	if len(media) > 4096 || len(location) > 4096 {
+		return importRecord{}, false, errors.New("media label or location exceeds 4096-byte limit")
+	}
+	return importRecord{File: ScannedFile{Relative: full, Name: name, Dir: dir, Extension: strings.ToLower(strings.TrimPrefix(path.Ext(name), ".")), Size: size, Modified: modified, ModifiedNS: modifiedNS}, Media: strings.Clone(media), Location: strings.Clone(location)}, false, nil
 }
 
 func parseExportDate(value string) (int64, int64) {
@@ -456,7 +549,8 @@ type xmlImportFrame struct {
 }
 
 func parseXMLExport(ctx context.Context, input io.Reader, emit func(importRecord) error) error {
-	decoder := xml.NewDecoder(input)
+	bounded := &xmlTokenReader{reader: input, ctx: ctx, limit: maxImportXMLTokenBytes}
+	decoder := xml.NewDecoder(bounded)
 	// The input has already been transcoded according to its BOM.
 	decoder.CharsetReader = func(charset string, reader io.Reader) (io.Reader, error) {
 		if strings.EqualFold(charset, "utf-16") || strings.EqualFold(charset, "utf-8") {
@@ -470,6 +564,7 @@ func parseXMLExport(ctx context.Context, input io.Reader, emit func(importRecord
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		bounded.limit = decoder.InputOffset() + maxImportXMLTokenBytes
 		token, err := decoder.Token()
 		if err == io.EOF {
 			break
@@ -479,6 +574,9 @@ func parseXMLExport(ctx context.Context, input io.Reader, emit func(importRecord
 		}
 		switch element := token.(type) {
 		case xml.StartElement:
+			if len(element.Attr) > maxImportColumns {
+				return errors.New("XML attribute count exceeds limit")
+			}
 			if len(stack) > 256 {
 				return errors.New("XML nesting exceeds limit")
 			}
@@ -550,6 +648,9 @@ func parseXMLExport(ctx context.Context, input io.Reader, emit func(importRecord
 					key = normalizeHeader(firstField(frame.fields, "name", "key"))
 				}
 				if key != "" {
+					if _, exists := parent.fields[key]; !exists && len(parent.fields) >= maxImportColumns {
+						return errors.New("XML field count exceeds limit")
+					}
 					parent.fields[key] = value
 				}
 				if (parent.tag == "disk" || parent.tag == "volume") && (key == "name" || key == "label") {

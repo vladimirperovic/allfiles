@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -239,7 +240,33 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 		if !get() {
 			return
 		}
-		id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
+		q := r.URL.Query()
+		id, _ := strconv.ParseInt(q.Get("id"), 10, 64)
+		if q.Has("text_offset") || q.Has("max_chars") {
+			offset, limit := 0, 4000
+			var err error
+			if q.Has("text_offset") {
+				offset, err = strconv.Atoi(q.Get("text_offset"))
+				if err != nil || offset < 0 || offset > 8388608 {
+					apiError(w, errors.New("Invalid document text offset"))
+					return
+				}
+			}
+			if q.Has("max_chars") {
+				limit, err = strconv.Atoi(q.Get("max_chars"))
+				if err != nil || limit < 0 || limit > 20000 {
+					apiError(w, errors.New("Invalid document text page size"))
+					return
+				}
+			}
+			f, page, e := a.store.FilePage(r.Context(), id, offset, limit)
+			if e != nil {
+				apiError(w, e)
+				return
+			}
+			jsonReply(w, 200, filePageResponse{File: f, FileTextPage: page, TextStatus: f.TextStatus, TextDetail: f.TextDetail})
+			return
+		}
 		f, t, e := a.store.File(r.Context(), id)
 		if e != nil {
 			apiError(w, e)
@@ -358,7 +385,7 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 		if !get() {
 			return
 		}
-		v, e := browse(r.URL.Query().Get("path"))
+		v, e := browseContext(r.Context(), r.URL.Query().Get("path"))
 		if e != nil {
 			apiError(w, e)
 			return
@@ -376,7 +403,7 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 			apiError(w, e)
 			return
 		}
-		f, _, e := a.store.File(r.Context(), v.ID)
+		f, _, e := a.store.FilePage(r.Context(), v.ID, 0, 0)
 		if e != nil {
 			apiError(w, e)
 			return
@@ -406,6 +433,14 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 		jsonReply(w, 404, map[string]string{"error": "Nepoznata ruta"})
 	}
 }
+
+type filePageResponse struct {
+	File FileResult `json:"file"`
+	FileTextPage
+	TextStatus string `json:"text_status"`
+	TextDetail string `json:"text_detail"`
+}
+
 func progressJSON(p *Progress) any {
 	if p == nil {
 		return nil
@@ -413,45 +448,72 @@ func progressJSON(p *Progress) any {
 	return map[string]any{"id": p.ID, "status": p.Status, "phase": p.Phase, "current": p.Current, "error": p.Error, "scanned": p.Scanned, "indexed": p.Indexed}
 }
 func browse(path string) (map[string]any, error) {
+	return browseContext(context.Background(), path)
+}
+
+func browseContext(ctx context.Context, path string) (map[string]any, error) {
 	type entry struct {
 		Name  string `json:"name"`
 		Path  string `json:"path"`
 		IsDir bool   `json:"is_dir"`
 	}
 	entries := []entry{}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if path == "" {
 		if runtime.GOOS == "windows" {
 			for c := 'A'; c <= 'Z'; c++ {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				p := fmt.Sprintf("%c:\\", c)
 				if st, e := os.Stat(p); e == nil && st.IsDir() {
 					entries = append(entries, entry{p, p, true})
 				}
 			}
-			return map[string]any{"path": "", "parent": "", "entries": entries}, nil
+			return map[string]any{"path": "", "parent": "", "entries": entries, "truncated": false}, nil
 		}
 		path = "/"
 	}
 	if !filepath.IsAbs(path) {
 		return nil, errors.New("Putanja mora biti apsolutna")
 	}
-	items, e := os.ReadDir(path)
+	directory, e := os.Open(path)
 	if e != nil {
 		return nil, e
 	}
-	for _, it := range items {
-		if it.Type()&os.ModeSymlink != 0 {
-			continue
+	defer directory.Close()
+	truncated := false
+readDirectories:
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		if len(entries) >= 2000 {
+		items, readErr := directory.ReadDir(256)
+		for _, it := range items {
+			if it.Type()&os.ModeSymlink != 0 || !it.IsDir() {
+				continue
+			}
+			if len(entries) == 2000 {
+				truncated = true
+				break readDirectories
+			}
+			entries = append(entries, entry{it.Name(), filepath.Join(path, it.Name()), true})
+		}
+		if readErr == io.EOF {
 			break
 		}
-		entries = append(entries, entry{it.Name(), filepath.Join(path, it.Name()), it.IsDir()})
+		if readErr != nil {
+			return nil, readErr
+		}
 	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	parent := filepath.Dir(path)
 	if parent == path {
 		parent = ""
 	}
-	return map[string]any{"path": path, "parent": parent, "entries": entries}, nil
+	return map[string]any{"path": path, "parent": parent, "entries": entries, "truncated": truncated}, nil
 }
 func openLocal(path string) error {
 	var c *exec.Cmd

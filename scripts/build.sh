@@ -6,7 +6,7 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
 cd "$project_dir"
 
-version=${1:-0.1.0}
+version=${1:-0.2.0}
 case "$version" in
   *[!a-zA-Z0-9._+-]*|'')
     printf '%s\n' 'Version must contain only letters, digits, dots, underscores, plus or minus signs.' >&2
@@ -25,5 +25,5 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; d
   CGO_ENABLED=0 GOOS="$target_os" GOARCH="$target_arch" \
     go build -trimpath -ldflags="-s -w -X main.Version=$version" -o "$output" .
 done
-cp README.md THIRD_PARTY_NOTICES.txt dist/
+cp README.md README.en.md THIRD_PARTY_NOTICES.txt dist/
 printf '%s\n' 'Binaries are in dist/. No catalogs or document content are included.'

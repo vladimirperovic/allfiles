@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^[A-Za-z0-9._+\-]+$')]
-    [string]$Version = '0.1.0'
+    [string]$Version = '0.2.0'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,7 +23,7 @@ try {
         & go build -trimpath "-ldflags=-s -w -X main.Version=$Version" -o $outputPath .
         if ($LASTEXITCODE -ne 0) { throw "Build failed for $target" }
     }
-    Copy-Item -LiteralPath 'README.md', 'THIRD_PARTY_NOTICES.txt' -Destination 'dist'
+    Copy-Item -LiteralPath 'README.md', 'README.en.md', 'THIRD_PARTY_NOTICES.txt' -Destination 'dist'
     Write-Host 'Binaries are in dist/. No catalogs or document content are included.'
 }
 finally {

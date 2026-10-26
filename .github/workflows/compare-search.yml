@@ -1,0 +1,49 @@
+name: Compare Go and Rust search
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ALLFILES_COMPARE_DIR: ${{ runner.temp }}/allfiles-comparison
+      CARGO_TARGET_DIR: ${{ runner.temp }}/rust-search-target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            experiments/go-search/go.sum
+      - name: Build one verified synthetic catalog and workload manifest
+        run: go test -run '^TestBuildComparisonFixture$' -count=1 -v .
+      - name: Build the identical native SQLite engine
+        run: bash experiments/rust-search/build-native-sqlite.sh "$RUNNER_TEMP/sqlite-native"
+      - name: Build both Go comparators
+        run: |
+          CGO_ENABLED=0 go -C experiments/go-search test ./...
+          CGO_ENABLED=0 go -C experiments/go-search build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/go-pure" .
+          CGO_ENABLED=1 CGO_CFLAGS="-I$RUNNER_TEMP/sqlite-native/include" CGO_LDFLAGS="-L$RUNNER_TEMP/sqlite-native/lib -lm -ldl -lpthread" go -C experiments/go-search test -tags 'native libsqlite3 sqlite_fts5' ./...
+          CGO_ENABLED=1 CGO_CFLAGS="-I$RUNNER_TEMP/sqlite-native/include" CGO_LDFLAGS="-L$RUNNER_TEMP/sqlite-native/lib -lm -ldl -lpthread" go -C experiments/go-search build -trimpath -ldflags="-s -w" -tags 'native libsqlite3 sqlite_fts5' -o "$RUNNER_TEMP/go-native" .
+      - name: Build Rust comparator
+        env:
+          SQLITE3_LIB_DIR: ${{ runner.temp }}/sqlite-native/lib
+          SQLITE3_INCLUDE_DIR: ${{ runner.temp }}/sqlite-native/include
+          SQLITE3_STATIC: '1'
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.99.1 test --release --locked --manifest-path experiments/rust-search/Cargo.toml
+          cargo +1.99.1 build --release --locked --manifest-path experiments/rust-search/Cargo.toml
+      - name: Compare sequentially and verify all results
+        run: |
+          python3 scripts/compare-search.py --go "$RUNNER_TEMP/go-pure" --go-native "$RUNNER_TEMP/go-native" --rust "$CARGO_TARGET_DIR/release/allfiles-rust-search" --data "$ALLFILES_COMPARE_DIR" --cases "$ALLFILES_COMPARE_DIR/cases.json" --output "$RUNNER_TEMP/comparison.json" > "$RUNNER_TEMP/comparison-output.txt"
+          cat "$RUNNER_TEMP/comparison-output.txt"
+          tail -n +2 "$RUNNER_TEMP/comparison-output.txt" >> "$GITHUB_STEP_SUMMARY"

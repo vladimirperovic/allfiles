@@ -14,7 +14,7 @@ The SQLite dedication comes from its exact upstream release tag.
 Refresh this file when dependencies or the release toolchain change.
 
 ==============================================================================
-Go runtime and standard library - notice source go1.26.2
+Go runtime and standard library - notice source go1.26.10
 Source notice: LICENSE
 ==============================================================================
 
@@ -48,7 +48,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ==============================================================================
-golang.org/x/crypto v0.46.1-0.20251210140736-7dacc380ba00 (vendored by go1.26.2)
+golang.org/x/crypto v0.46.1-0.20251210140736-7dacc380ba00 (vendored by go1.26.10)
 Source notice: LICENSE
 ==============================================================================
 
@@ -82,7 +82,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ==============================================================================
-golang.org/x/net v0.47.1-0.20251128220604-7c360367ab7e (vendored by go1.26.2)
+golang.org/x/net v0.47.1-0.20261008201845-026a91c07857 (vendored by go1.26.10)
 Source notice: LICENSE
 ==============================================================================
 
@@ -116,7 +116,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ==============================================================================
-golang.org/x/sys v0.39.0 (vendored by go1.26.2)
+golang.org/x/sys v0.39.0 (vendored by go1.26.10)
 Source notice: LICENSE
 ==============================================================================
 
@@ -150,7 +150,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
 ==============================================================================
-golang.org/x/text v0.32.0 (vendored by go1.26.2)
+golang.org/x/text v0.32.0 (vendored by go1.26.10)
 Source notice: LICENSE
 ==============================================================================
 

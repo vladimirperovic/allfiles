@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf16"
-	"unicode/utf8"
 
 	pdf "github.com/ledongthuc/pdf"
 )
@@ -48,10 +47,9 @@ func (s *textSink) add(text string) error {
 	}
 	left := s.limit - s.Len()
 	if len(text) > left {
-		text = text[:left]
-		for len(text) > 0 && !utf8.ValidString(text) {
-			text = text[:len(text)-1]
-		}
+		// Repair once: a malformed byte near the beginning must not discard
+		// valid text after it or repeatedly rescan the entire bounded prefix.
+		text = strings.ToValidUTF8(text[:left], " ")
 		s.WriteString(text)
 		return errTextLimit
 	}

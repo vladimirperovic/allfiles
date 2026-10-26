@@ -3,6 +3,7 @@
   'use strict';
   const canvas = document.getElementById('ambient-particles');
   const button = document.getElementById('motion-toggle');
+  const t = window.AllFilesI18n.t;
   if (!canvas || !button) return;
   const context = canvas.getContext('2d');
   if (!context) { canvas.remove(); button.hidden = true; return; }
@@ -95,8 +96,8 @@
     const on = enabled && !reduced.matches;
     button.setAttribute('aria-pressed', String(on));
     button.disabled = reduced.matches;
-    button.title = reduced.matches ? 'Animacija je isključena prema postavkama smanjenog kretanja'
-      : on ? 'Isključi animaciju tačkica' : 'Pokreni animaciju tačkica';
+    button.title = t(reduced.matches ? 'Animacija je isključena prema postavkama smanjenog kretanja'
+      : on ? 'Isključi animaciju tačkica' : 'Pokreni animaciju tačkica');
     button.setAttribute('aria-label', button.title);
     if (!canRun()) {
       cancelAnimationFrame(frame); frame = 0; mouse.active = false;
@@ -120,6 +121,7 @@
   window.addEventListener('scroll', () => { bounds = canvas.getBoundingClientRect(); }, { passive: true });
   document.addEventListener('visibilitychange', reconcile);
   reduced.addEventListener('change', reconcile);
+  window.addEventListener('allfiles:languagechange', reconcile);
   window.addEventListener('pagehide', () => { departed = true; reconcile(); });
   window.addEventListener('pageshow', () => { departed = false; reconcile(); });
   new ResizeObserver(resize).observe(canvas.parentElement);

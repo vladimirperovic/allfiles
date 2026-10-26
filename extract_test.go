@@ -4,12 +4,23 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestTextLimitPreservesValidTextAfterMalformedUTF8(t *testing.T) {
+	sink := &textSink{limit: 8}
+	if err := sink.add("\xffabcdefghijk"); !errors.Is(err, errTextLimit) {
+		t.Fatalf("expected text limit: %v", err)
+	}
+	if sink.String() != " abcdefg" {
+		t.Fatalf("valid text discarded with malformed byte: %q", sink.String())
+	}
+}
 
 func makeOfficeFixture(t *testing.T, extension string, parts map[string]string) string {
 	t.Helper()

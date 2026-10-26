@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -194,6 +195,48 @@ func TestAPISearchFileAndSourceResponses(t *testing.T) {
 	for _, query := range []string{"/api/search?mode=invalid", "/api/search?q=" + strings.Repeat("x", 1001)} {
 		if w := apiTestRequest(a, http.MethodGet, query, "", nil); w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid search status = %d", w.Code)
+		}
+	}
+}
+
+func TestAPIFileTextPagesBoundOutputAndCountUnicode(t *testing.T) {
+	a := newAPITestApp(t)
+	body := strings.Repeat("Až😀\n", 12000)
+	_, file := testAPIFile(t, a, t.TempDir(), "", "unicode.txt", body)
+	base := "/api/file?id=" + strconv.FormatInt(file.ID, 10)
+	for _, test := range []struct {
+		query            string
+		text             string
+		offset, returned int
+		more             bool
+	}{
+		{"&text_offset=1&max_chars=3", "ž😀\n", 1, 3, true},
+		{"&text_offset=47998&max_chars=20", "😀\n", 47998, 2, false},
+		{"&text_offset=50000&max_chars=20", "", 50000, 0, false},
+		{"&max_chars=0", "", 0, 0, true},
+	} {
+		w := apiTestRequest(a, http.MethodGet, base+test.query, "", nil)
+		var result filePageResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+			t.Fatalf("%s: HTTP %d %s", test.query, w.Code, w.Body.String())
+		}
+		if result.Text != test.text || result.Offset != test.offset || result.ReturnedChars != test.returned || result.HasMore != test.more || w.Body.Len() > 4096 {
+			t.Fatalf("incorrect/bloated text page %s: %#v (%d bytes)", test.query, result, w.Body.Len())
+		}
+		if strings.Contains(test.query, "max_chars=0") {
+			if result.TotalChars != nil {
+				t.Fatal("metadata-only request counted/decompressed the entire document")
+			}
+		} else if result.TotalChars == nil || *result.TotalChars != 48000 {
+			t.Fatalf("total text characters missing or incorrect: %#v", result.TotalChars)
+		}
+	}
+	for _, query := range []string{
+		"&text_offset=-1", "&text_offset=8388609", "&text_offset=wrong", "&text_offset=",
+		"&max_chars=-1", "&max_chars=20001", "&max_chars=wrong", "&max_chars=",
+	} {
+		if w := apiTestRequest(a, http.MethodGet, base+query, "", nil); w.Code != http.StatusBadRequest {
+			t.Errorf("invalid pagination %s accepted: HTTP %d", query, w.Code)
 		}
 	}
 }
@@ -436,12 +479,84 @@ func TestAPIBrowseListsOnlyRequestedDirectory(t *testing.T) {
 	}
 	w := apiTestRequest(a, http.MethodGet, "/api/browse?path="+url.QueryEscape(root), "", nil)
 	data, _ := io.ReadAll(w.Result().Body)
-	if w.Code != http.StatusOK || !strings.Contains(string(data), "Documents") || !strings.Contains(string(data), "example.txt") || strings.Contains(string(data), "contents must not") {
+	if w.Code != http.StatusOK || !strings.Contains(string(data), "Documents") || strings.Contains(string(data), "example.txt") || strings.Contains(string(data), "contents must not") {
 		t.Fatalf("browse failed: %d %s", w.Code, data)
 	}
 	w = apiTestRequest(a, http.MethodGet, "/api/browse?path=relative/path", "", nil)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("relative browse status = %d", w.Code)
+	}
+}
+
+func TestBrowseLargeDirectoryKeepsFoldersAndReportsTruncation(t *testing.T) {
+	read := func(t *testing.T, path string) ([]string, bool) {
+		t.Helper()
+		result, err := browse(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ := json.Marshal(result)
+		var response struct {
+			Entries []struct {
+				Name  string `json:"name"`
+				IsDir bool   `json:"is_dir"`
+			} `json:"entries"`
+			Truncated bool `json:"truncated"`
+		}
+		if err := json.Unmarshal(encoded, &response); err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(response.Entries))
+		for _, item := range response.Entries {
+			if !item.IsDir {
+				t.Fatal("folder picker returned an ordinary file")
+			}
+			if len(names) > 0 && names[len(names)-1] > item.Name {
+				t.Fatal("folder selection is not sorted")
+			}
+			names = append(names, item.Name)
+		}
+		return names, response.Truncated
+	}
+	t.Run("files cannot hide folders", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 0; i < 2000; i++ {
+			if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%04d.txt", i)), nil, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Mkdir(filepath.Join(root, "zz-folder"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		names, truncated := read(t, root)
+		if len(names) != 1 || names[0] != "zz-folder" || truncated {
+			t.Fatalf("folder hidden by files: %v, truncated=%v", names, truncated)
+		}
+	})
+	t.Run("directory limit is explicit", func(t *testing.T) {
+		root := t.TempDir()
+		for i := 1999; i >= 0; i-- {
+			if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("folder-%04d", i)), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if names, truncated := read(t, root); len(names) != 2000 || truncated {
+			t.Fatalf("exact limit: %d, truncated=%v", len(names), truncated)
+		}
+		if err := os.Mkdir(filepath.Join(root, "extra-folder"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if names, truncated := read(t, root); len(names) != 2000 || !truncated {
+			t.Fatalf("exceeded limit: %d, truncated=%v", len(names), truncated)
+		}
+	})
+}
+
+func TestBrowseHonorsCancelledRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := browseContext(ctx, t.TempDir()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled browse returned %v", err)
 	}
 }
 
