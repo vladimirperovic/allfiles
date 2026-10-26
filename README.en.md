@@ -221,10 +221,43 @@ Performance depends on the actual archive, disk, query and content. Short/common
 
 Version 0.2.0 adds transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removes redundant per-document writes during metadata import. It also bounds CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope.
 
-Remaining work includes cursor pagination for deep pages, cheaper counts for broad searches, export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
+Remaining work includes cursor pagination for very deep pages, reads that do not wait for an indexing transaction (one lock currently serializes requests), export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 
 The separate [Go](experiments/go-search/README.md) and [Rust](experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow verifies every count and ordered ID page and records runtime versions, timings, peak process memory and benchmark executable sizes.
 
 The [measured comparison and recommendations](experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the 0.3.0 production port now includes native integration and compatible encryption. These SQL measurements exclude complete application behavior and encryption.
 
 The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](experiments/results/2026-10-26-rust-app-windows.json), reproduced by `scripts/compare-http.py`.
+
+### Search and indexing optimizations (after 0.3.0)
+
+Same machine, catalog and method as above: two reversed-order rounds, three warmups, 15 measured requests per case, mean of round medians. This compares Rust 0.3.0 before and after these changes. Every response has the same total and ordered IDs as before.
+
+| HTTP search | Before | After |
+|---|---:|---:|
+| Rare filename | 1.470 ms | 1.505 ms |
+| Rare path | 1.228 ms | 1.258 ms |
+| First page, no query | 0.537 ms | 0.498 ms |
+| Page at item 90,000, no query | 16.189 ms | 1.243 ms |
+| Common filename, 99,999 matches | 131.078 ms | 8.418 ms |
+| Common filename, page at item 90,000 | 170.718 ms | 8.393 ms |
+| Single letter, 100,000 matches | 120.937 ms | 6.456 ms |
+| Content: rare term, 50 locations of one document | 5.005 ms | 4.560 ms |
+| Content: common term, 50 locations of one document | 4.858 ms | 2.964 ms |
+
+Writes are measured as whole CLI process time on the same machine: two reversed-order rounds, mean of both rounds. Inputs are generated: a CSV with 100,000 records in 7,000 folders and 3,000 small text documents. Content scanning before these changes depends heavily on synchronous disk writes; its two rounds took 52.1 s and 80.6 s.
+
+| Write (CLI, whole process) | Before | After |
+|---|---:|---:|
+| Import a 100,000-record CSV | 7.20 s | 3.54 s |
+| Reimport the same CSV | 4.52 s | 1.31 s |
+| Scan 3,000 documents with content | 66.36 s | 0.91 s |
+| Rescan without changes | 0.20 s | 0.06 s |
+
+- **Filename search.** The trigram index is fast for rare terms, but a term present in nearly every name made SQLite verify and sort the whole catalog twice, once for the total and once for the page. A short probe (about 0.1–0.4 ms) now picks, per term, either the trigram index or an ordered pass over the name index; terms shorter than three characters always use the pass. One pass yields both the total and the requested page, and folder/media details are read only for files on that page.
+- **Content indexing.** Each document used to be its own transaction; with `synchronous=FULL` and two databases that means several synchronous disk writes per document. Text is now extracted without holding the catalog lock and committed in groups of up to 256 documents, 16 MiB of text or 2 seconds. Cancelling discards only text extracted after the last commit; the next scan processes it again.
+- **Import and metadata.** SQL statements are prepared once per batch, and a batch holds 2,048 instead of 256 files. A multi-media import finishes all media in one transaction. At most 4,096 imported records still wait in memory.
+- **Database cache.** SQLite keeps up to 64 MiB of pages per database instead of about 2 MiB, so repeated searches read the file less often and, for encrypted catalogs, decrypt less often. Memory is used only for pages actually read.
+- **Snippets.** Snippets match terms regardless of case and diacritics, like the search itself: the query “kuca” now shows the text around “Kuća” instead of the start of the document. A document is decompressed only until the snippet is complete. With several terms the snippet starts at whichever term occurs first.
+
+A rare filename is about 0.03 ms slower because of the probe. Measurements use a warm cache and an unencrypted catalog; they exclude cold storage, encryption, large varied documents, PDF/Office extraction and memory. Write times depend most on the disk, so a container or USB drive can show a different ratio. [Raw samples](experiments/results/2026-10-26-rust-optimizations-windows.json) are reproduced by `scripts/compare-http.py` and `scripts/compare-writes.py`.

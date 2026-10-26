@@ -62,11 +62,21 @@ fn text_page(payload: &[u8], offset: usize, limit: usize) -> Result<(String, Opt
     }
 }
 pub fn fold(s: &str) -> String {
-    s.to_lowercase()
-        .replace(['č', 'ć'], "c")
-        .replace('š', "s")
-        .replace('ž', "z")
-        .replace('đ', "dj")
+    let lower = s.to_lowercase();
+    if lower.is_ascii() {
+        return lower;
+    }
+    let mut out = String::with_capacity(lower.len());
+    for c in lower.chars() {
+        match c {
+            'č' | 'ć' => out.push('c'),
+            'š' => out.push('s'),
+            'ž' => out.push('z'),
+            'đ' => out.push_str("dj"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 pub fn absolute(path: &Path) -> Result<PathBuf> {
     Ok(std::path::absolute(path)?)
@@ -149,6 +159,13 @@ pub struct IndexedFile {
     pub version: String,
     pub needs_text: bool,
 }
+pub struct Content<'a> {
+    pub id: i64,
+    pub version: &'a str,
+    pub status: &'a str,
+    pub text: &'a str,
+    pub detail: &'a str,
+}
 #[derive(Default, Deserialize, Clone)]
 #[serde(default)]
 pub struct SearchOptions {
@@ -210,7 +227,9 @@ fn open_connection(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<Connection
         None => Connection::open_with_flags(path, flags)?,
     };
     conn.busy_timeout(Duration::from_secs(5))?;
-    conn.execute_batch("PRAGMA temp_store=MEMORY;PRAGMA trusted_schema=ON;PRAGMA mmap_size=0;")?;
+    // Without mmap every page-cache miss is a read call (and a decryption for
+    // protected catalogs); 64 MiB keeps typical catalogs cached between searches.
+    conn.execute_batch("PRAGMA temp_store=MEMORY;PRAGMA trusted_schema=ON;PRAGMA mmap_size=0;PRAGMA cache_size=-65536;")?;
     Ok(conn)
 }
 fn uri(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<String> {
@@ -505,73 +524,110 @@ impl Store {
         self.check()?;
         let has_content = self.ensure_content(false)?;
         let tx = self.conn.transaction()?;
-        let mut dirs = HashMap::new();
         let mut out = Vec::with_capacity(entries.len());
-        for f in entries {
-            let dir = if f.dir == "." {
-                String::new()
+        {
+            // Prepare once per batch; per-row preparation dominated large imports.
+            let mut find_dir =
+                tx.prepare("SELECT id FROM directories WHERE source_id=? AND path=?")?;
+            let mut add_dir =
+                tx.prepare("INSERT INTO directories(source_id,path,search_path) VALUES(?,?,?)")?;
+            let mut find_file =
+                tx.prepare("SELECT id,version,text_status FROM files WHERE dir_id=? AND name=?")?;
+            let mut update_file = tx.prepare("UPDATE files SET size=?,modified=?,modified_ns=?,version=?,seen_scan=?,text_status=CASE WHEN version!=? THEN 'not_indexed' ELSE text_status END,text_detail=CASE WHEN version!=? THEN '' ELSE text_detail END WHERE id=?")?;
+            let mut add_file = tx.prepare("INSERT INTO files(source_id,dir_id,name,search_name,extension,size,modified,modified_ns,version,seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?)")?;
+            let mut unsupported =
+                tx.prepare("UPDATE files SET text_status='unsupported',text_detail='' WHERE id=?")?;
+            let mut linked = if has_content {
+                Some(tx.prepare("SELECT count(*) FROM content.links l JOIN content.documents d ON d.id=l.doc_id WHERE l.file_id=? AND l.version=?")?)
             } else {
-                f.dir.replace('\\', "/")
+                None
             };
-            let did = if let Some(d) = dirs.get(&dir) {
-                *d
-            } else {
-                tx.execute(
-                    "INSERT OR IGNORE INTO directories(source_id,path,search_path) VALUES(?,?,?)",
-                    params![source, dir, fold(&dir)],
-                )?;
-                let d: i64 = tx.query_row(
-                    "SELECT id FROM directories WHERE source_id=? AND path=?",
-                    params![source, dir],
-                    |r| r.get(0),
-                )?;
-                dirs.insert(dir, d);
-                d
-            };
-            let version = format!("{}:{}", f.size, f.modified_ns);
-            let old: Option<(i64, String, String)> = tx
-                .query_row(
-                    "SELECT id,version,text_status FROM files WHERE dir_id=? AND name=?",
-                    params![did, f.name],
-                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-                )
-                .optional()?;
-            let fresh = old.is_none();
-            let (id, previous, status) = if let Some((id, previous, status)) = old {
-                tx.execute("UPDATE files SET size=?,modified=?,modified_ns=?,version=?,seen_scan=?,text_status=CASE WHEN version!=? THEN 'not_indexed' ELSE text_status END,text_detail=CASE WHEN version!=? THEN '' ELSE text_detail END WHERE id=?",params![f.size,f.modified,f.modified_ns,version,scan,version,version,id])?;
-                (id, previous, status)
-            } else {
-                tx.execute("INSERT INTO files(source_id,dir_id,name,search_name,extension,size,modified,modified_ns,version,seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?)",params![source,did,f.name,fold(&f.name),f.extension.trim_start_matches('.').to_lowercase(),f.size,f.modified,f.modified_ns,version,scan])?;
-                (
-                    tx.last_insert_rowid(),
-                    String::new(),
-                    "not_indexed".to_owned(),
-                )
-            };
-            let candidate = crate::extract::candidate(&f.extension);
-            if !candidate && (fresh || previous != version) {
-                tx.execute(
-                    "UPDATE files SET text_status='unsupported',text_detail='' WHERE id=?",
-                    [id],
-                )?;
+            let mut dirs = HashMap::new();
+            for f in entries {
+                let dir = if f.dir == "." {
+                    String::new()
+                } else {
+                    f.dir.replace('\\', "/")
+                };
+                let did = if let Some(d) = dirs.get(&dir) {
+                    *d
+                } else {
+                    let d = match find_dir
+                        .query_row(params![source, dir], |r| r.get::<_, i64>(0))
+                        .optional()?
+                    {
+                        Some(d) => d,
+                        None => {
+                            add_dir.execute(params![source, dir, fold(&dir)])?;
+                            tx.last_insert_rowid()
+                        }
+                    };
+                    dirs.insert(dir, d);
+                    d
+                };
+                let version = format!("{}:{}", f.size, f.modified_ns);
+                let old: Option<(i64, String, String)> = find_file
+                    .query_row(params![did, f.name], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })
+                    .optional()?;
+                let fresh = old.is_none();
+                let (id, previous, status) = if let Some((id, previous, status)) = old {
+                    update_file.execute(params![
+                        f.size,
+                        f.modified,
+                        f.modified_ns,
+                        version,
+                        scan,
+                        version,
+                        version,
+                        id
+                    ])?;
+                    (id, previous, status)
+                } else {
+                    add_file.execute(params![
+                        source,
+                        did,
+                        f.name,
+                        fold(&f.name),
+                        f.extension.trim_start_matches('.').to_lowercase(),
+                        f.size,
+                        f.modified,
+                        f.modified_ns,
+                        version,
+                        scan
+                    ])?;
+                    (
+                        tx.last_insert_rowid(),
+                        String::new(),
+                        "not_indexed".to_owned(),
+                    )
+                };
+                let candidate = crate::extract::candidate(&f.extension);
+                if !candidate && (fresh || previous != version) {
+                    unsupported.execute([id])?;
+                }
+                let expects = matches!(status.as_str(), "indexed" | "truncated");
+                let mut needs = candidate
+                    && (fresh
+                        || previous != version
+                        || status == "not_indexed"
+                        || status == "error"
+                        || (!has_content && expects));
+                if let Some(linked) = linked.as_mut()
+                    && candidate
+                    && expects
+                    && !needs
+                {
+                    needs = linked.query_row(params![id, version], |r| r.get::<_, i64>(0))? == 0;
+                }
+                out.push(IndexedFile {
+                    id,
+                    relative: f.relative.clone(),
+                    version,
+                    needs_text: needs,
+                });
             }
-            let expects = matches!(status.as_str(), "indexed" | "truncated");
-            let mut needs = candidate
-                && (fresh
-                    || previous != version
-                    || status == "not_indexed"
-                    || status == "error"
-                    || (!has_content && expects));
-            if candidate && has_content && expects && !needs {
-                let linked:i64=tx.query_row("SELECT count(*) FROM content.links l JOIN content.documents d ON d.id=l.doc_id WHERE l.file_id=? AND l.version=?",params![id,version],|r|r.get(0))?;
-                needs = linked == 0;
-            }
-            out.push(IndexedFile {
-                id,
-                relative: f.relative.clone(),
-                version,
-                needs_text: needs,
-            });
         }
         tx.commit()?;
         Ok(out)
@@ -584,86 +640,105 @@ impl Store {
         text: &str,
         detail: &str,
     ) -> Result<()> {
+        self.record_contents(&[Content {
+            id,
+            version,
+            status,
+            text,
+            detail,
+        }])
+    }
+    // Store extracted text for several files in one transaction. With
+    // synchronous=FULL each commit syncs both databases and a super-journal,
+    // which dominated scans of many small documents.
+    pub fn record_contents(&mut self, items: &[Content<'_>]) -> Result<()> {
         self.check()?;
-        if text.len() > MAX_TEXT {
+        if items.iter().any(|c| c.text.len() > MAX_TEXT) {
             bail!("Document text limit exceeded");
         }
-        let has_text = !text.is_empty() && matches!(status, "indexed" | "truncated");
-        if has_text || self.attached {
+        let has_text =
+            |c: &Content<'_>| !c.text.is_empty() && matches!(c.status, "indexed" | "truncated");
+        if items.iter().any(has_text) || self.attached {
             self.ensure_content(true)?;
         }
+        let attached = self.attached;
         let tx = self.conn.transaction()?;
-        let current: String =
-            tx.query_row("SELECT version FROM files WHERE id=?", [id], |r| r.get(0))?;
-        if current != version {
-            bail!("Dokument je izmenjen tokom indeksiranja");
-        }
-        if self.attached {
-            tx.execute("DELETE FROM content.links WHERE file_id=?", [id])?;
-        }
-        if has_text {
-            let hash = hex::encode(Sha256::digest(text.as_bytes()));
-            let doc: Option<i64> = tx
-                .query_row(
-                    "SELECT id FROM content.documents WHERE hash=?",
-                    [&hash],
-                    |r| r.get(0),
-                )
-                .optional()?;
-            let doc = if let Some(id) = doc {
-                id
+        {
+            let mut current = tx.prepare("SELECT version FROM files WHERE id=?")?;
+            let mut status =
+                tx.prepare("UPDATE files SET text_status=?,text_detail=? WHERE id=?")?;
+            let mut content = if attached {
+                Some((
+                    tx.prepare("DELETE FROM content.links WHERE file_id=?")?,
+                    tx.prepare("SELECT id FROM content.documents WHERE hash=?")?,
+                    tx.prepare(
+                        "INSERT INTO content.documents(hash,payload,plain_size) VALUES(?,?,?)",
+                    )?,
+                    tx.prepare("INSERT INTO content.fts(rowid,body) VALUES(?,?)")?,
+                    tx.prepare("INSERT INTO content.links(file_id,version,doc_id) VALUES(?,?,?)")?,
+                ))
             } else {
-                let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
-                z.write_all(text.as_bytes())?;
-                let payload = z.finish()?;
-                tx.execute(
-                    "INSERT INTO content.documents(hash,payload,plain_size) VALUES(?,?,?)",
-                    params![hash, payload, text.len() as i64],
-                )?;
-                let id = tx.last_insert_rowid();
-                tx.execute(
-                    "INSERT INTO content.fts(rowid,body) VALUES(?,?)",
-                    params![id, text],
-                )?;
-                id
+                None
             };
-            tx.execute(
-                "INSERT INTO content.links(file_id,version,doc_id) VALUES(?,?,?)",
-                params![id, version, doc],
-            )?;
+            for c in items {
+                let version: String = current.query_row([c.id], |r| r.get(0))?;
+                if version != c.version {
+                    bail!("Dokument je izmenjen tokom indeksiranja");
+                }
+                if let Some((unlink, find, insert, index, link)) = content.as_mut() {
+                    unlink.execute([c.id])?;
+                    if has_text(c) {
+                        let hash = hex::encode(Sha256::digest(c.text.as_bytes()));
+                        let doc = match find.query_row([&hash], |r| r.get(0)).optional()? {
+                            Some(doc) => doc,
+                            None => {
+                                let mut z = ZlibEncoder::new(Vec::new(), Compression::default());
+                                z.write_all(c.text.as_bytes())?;
+                                insert.execute(params![hash, z.finish()?, c.text.len() as i64])?;
+                                let doc = tx.last_insert_rowid();
+                                index.execute(params![doc, c.text])?;
+                                doc
+                            }
+                        };
+                        link.execute(params![c.id, c.version, doc])?;
+                    }
+                }
+                status.execute(params![c.status, c.detail, c.id])?;
+            }
         }
-        tx.execute(
-            "UPDATE files SET text_status=?,text_detail=? WHERE id=?",
-            params![status, detail, id],
-        )?;
         tx.commit()?;
         Ok(())
     }
     pub fn finish_scan(&mut self, source: &str, scan: &str, complete: bool) -> Result<()> {
+        self.finish_scans(&[source], scan, complete)
+    }
+    // Close several sources of one scan or import in a single transaction;
+    // the catalog-wide content cleanup then runs once instead of per source.
+    pub fn finish_scans(&mut self, sources: &[&str], scan: &str, complete: bool) -> Result<()> {
         self.check()?;
         self.ensure_content(false)?;
+        let attached = self.attached;
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let tx = self.conn.transaction()?;
-        if complete {
-            if self.attached {
-                tx.execute("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE source_id=? AND seen_scan!=?)",params![source,scan])?;
+        for source in sources {
+            if complete {
+                if attached {
+                    tx.execute("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE source_id=? AND seen_scan!=?)",params![source,scan])?;
+                }
+                tx.execute(
+                    "DELETE FROM files WHERE source_id=? AND seen_scan!=?",
+                    params![source, scan],
+                )?;
+                tx.execute("DELETE FROM directories WHERE source_id=? AND id NOT IN(SELECT dir_id FROM files WHERE source_id=?)",params![source,source])?;
             }
             tx.execute(
-                "DELETE FROM files WHERE source_id=? AND seen_scan!=?",
-                params![source, scan],
+                "UPDATE sources SET status=?,last_scan=? WHERE id=?",
+                params![if complete { "ready" } else { "partial" }, now, source],
             )?;
-            tx.execute("DELETE FROM directories WHERE source_id=? AND id NOT IN(SELECT dir_id FROM files WHERE source_id=?)",params![source,source])?;
         }
-        if self.attached {
+        if attached {
             tx.execute_batch("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE text_status NOT IN ('indexed','truncated'));DELETE FROM content.fts WHERE rowid IN(SELECT id FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links));DELETE FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links);")?;
         }
-        tx.execute(
-            "UPDATE sources SET status=?,last_scan=? WHERE id=?",
-            params![
-                if complete { "ready" } else { "partial" },
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                source
-            ],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -696,9 +771,36 @@ impl Store {
         let query = o.query.trim();
         let mut names = Vec::new();
         let mut name_args: Vec<SqlValue> = Vec::new();
-        for term in query.replace('"', "").split_whitespace() {
-            let g = format!("*{}*", glob_literal(&fold(term)));
-            names.push("f.id IN(SELECT rowid FROM names WHERE search_name GLOB ? UNION SELECT pf.id FROM files pf WHERE pf.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))");
+        // Content-only searches never use name conditions; skip their probes.
+        let terms = if o.mode == "content" {
+            Vec::new()
+        } else {
+            query
+                .replace('"', "")
+                .split_whitespace()
+                .map(fold)
+                .collect::<Vec<_>>()
+        };
+        // Trigram lookups are fast for selective terms, but a broad term makes
+        // SQLite verify and sort nearly every row. Probe each term and scan the
+        // ordered name index instead when the trigram candidate set is large.
+        let threshold = if terms.is_empty() {
+            0
+        } else {
+            let files: i64 =
+                self.conn
+                    .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
+                        r.get(0)
+                    })?;
+            (files / 16).clamp(1000, 50_000)
+        };
+        for term in &terms {
+            let g = format!("*{}*", glob_literal(term));
+            names.push(if self.selective(term, &g, threshold)? {
+                "f.id IN(SELECT rowid FROM names WHERE search_name GLOB ? UNION SELECT pf.id FROM files pf WHERE pf.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))"
+            } else {
+                "(f.search_name GLOB ? OR f.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))"
+            });
             name_args.push(g.clone().into());
             name_args.push(g.into());
         }
@@ -717,6 +819,7 @@ impl Store {
                 content_args.push(tq.into());
             }
         }
+        let everything = name_sql == "1=1" && o.mode != "content";
         match o.mode.as_str() {
             "files" => {
                 clauses.push(format!("({name_sql})"));
@@ -726,6 +829,8 @@ impl Store {
                 clauses.push(content_sql.into());
                 args.extend(content_args);
             }
+            // An empty name filter already matches every file.
+            _ if name_sql == "1=1" => {}
             _ => {
                 clauses.push(format!("(({name_sql}) OR ({content_sql}))"));
                 args.extend(name_args);
@@ -733,49 +838,71 @@ impl Store {
             }
         }
         let condition = format!(" WHERE {}", clauses.join(" AND "));
-        let total = if o.source.is_empty()
-            && o.extension.is_empty()
-            && name_sql == "1=1"
-            && o.mode != "content"
-        {
-            self.conn
-                .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
-                    r.get(0)
-                })?
-        } else {
-            self.conn.query_row(
-                &format!("SELECT COUNT(*) FROM files f{condition}"),
-                params_from_iter(args.iter()),
-                |r| r.get(0),
-            )?
-        };
         let order = match o.sort.as_str() {
             "size" => "f.size DESC,f.id",
             "modified" => "f.modified DESC,f.id",
             _ => "f.search_name,f.id",
         };
-        args.push(o.limit.into());
-        args.push(o.offset.into());
-        let mut results = self
-            .conn
-            .prepare(&format!(
-                "SELECT {COLUMNS}{FROM}{condition} ORDER BY {order} LIMIT ? OFFSET ?"
-            ))?
-            .query_map(params_from_iter(args.iter()), file_result)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let (total, ids) = if o.source.is_empty() && o.extension.is_empty() && everything {
+            // Page through the ordered index first and join metadata for the page only.
+            let total =
+                self.conn
+                    .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
+                        r.get(0)
+                    })?;
+            let ids = self
+                .conn
+                .prepare(&format!(
+                    "SELECT f.id FROM files f ORDER BY {order} LIMIT ? OFFSET ?"
+                ))?
+                .query_map(params![o.limit, o.offset], |r| r.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            (total, ids)
+        } else {
+            // One ordered pass yields both the total and the requested page,
+            // so the match conditions are evaluated once instead of twice.
+            let mut statement = self.conn.prepare(&format!(
+                "SELECT f.id FROM files f{condition} ORDER BY {order}"
+            ))?;
+            let mut rows = statement.query(params_from_iter(args.iter()))?;
+            let (mut total, mut ids) = (0i64, Vec::new());
+            while let Some(row) = rows.next()? {
+                if total >= o.offset && total - o.offset < o.limit {
+                    ids.push(row.get::<_, i64>(0)?);
+                }
+                total += 1;
+            }
+            (total, ids)
+        };
+        let mut results = if ids.is_empty() {
+            Vec::new()
+        } else {
+            self.conn
+                .prepare(&format!(
+                    "SELECT {COLUMNS}{FROM} WHERE f.id IN({}) ORDER BY {order}",
+                    vec!["?"; ids.len()].join(",")
+                ))?
+                .query_map(params_from_iter(ids.iter()), file_result)?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
         if o.mode != "files" && self.attached {
-            let mut cache = HashMap::new();
+            let terms = snippet_terms(query);
+            let mut cache: HashMap<i64, String> = HashMap::new();
+            let mut documents = self.conn.prepare("SELECT l.doc_id FROM content.links l JOIN files f ON f.id=l.file_id WHERE f.id=? AND f.version=l.version")?;
+            let mut payloads = self
+                .conn
+                .prepare("SELECT payload FROM content.documents WHERE id=?")?;
             for f in &mut results {
                 if !matches!(f.text_status.as_str(), "indexed" | "truncated") {
                     continue;
                 }
-                let doc:Option<i64>=self.conn.query_row("SELECT l.doc_id FROM content.links l JOIN files f ON f.id=l.file_id WHERE f.id=? AND f.version=l.version",[f.id],|r|r.get(0)).optional()?;
+                let doc: Option<i64> = documents.query_row([f.id], |r| r.get(0)).optional()?;
                 if let Some(doc) = doc {
                     if let Some(s) = cache.get(&doc) {
-                        f.snippet = String::clone(s);
+                        f.snippet = s.clone();
                     } else {
-                        let text = self.document_text(doc)?;
-                        let s = snippet(&text, query);
+                        let payload: Vec<u8> = payloads.query_row([doc], |r| r.get(0))?;
+                        let s = snippet(&payload, &terms)?;
                         f.snippet = s.clone();
                         cache.insert(doc, s);
                     }
@@ -790,20 +917,21 @@ impl Store {
             limit: o.limit,
         })
     }
-    fn document_text(&self, doc: i64) -> Result<String> {
-        let payload: Vec<u8> = self.conn.query_row(
-            "SELECT payload FROM content.documents WHERE id=?",
-            [doc],
+    // True when a term's trigram candidates stay below `limit`. Terms without
+    // three literal characters cannot use the trigram index and always scan.
+    fn selective(&self, term: &str, glob: &str, limit: i64) -> Result<bool> {
+        if !term
+            .split(['[', '*', '?'])
+            .any(|run| run.chars().count() >= 3)
+        {
+            return Ok(false);
+        }
+        let candidates: i64 = self.conn.query_row(
+            "SELECT (SELECT count(*) FROM (SELECT 1 FROM names WHERE search_name GLOB ?1 LIMIT ?2))+(SELECT count(*) FROM (SELECT 1 FROM files pf WHERE pf.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?1) LIMIT ?2))",
+            params![glob, limit],
             |r| r.get(0),
         )?;
-        let mut bytes = Vec::new();
-        ZlibDecoder::new(payload.as_slice())
-            .take((MAX_TEXT + 1) as u64)
-            .read_to_end(&mut bytes)?;
-        if bytes.len() > MAX_TEXT {
-            bail!("Stored document exceeds the text limit");
-        }
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        Ok(candidates < limit)
     }
     pub fn file(&mut self, id: i64, offset: usize, max_chars: usize) -> Result<Value> {
         self.check()?;
@@ -1051,24 +1179,115 @@ fn text_query(query: &str) -> String {
     }
     words.join(" AND ")
 }
-fn snippet(text: &str, query: &str) -> String {
-    let lower = text.to_lowercase();
-    let mut index = 0;
-    for term in query.replace('"', "").split_whitespace() {
-        if let Some(p) = lower.find(&term.to_lowercase()) {
-            index = lower[..p].chars().count();
+fn snippet_terms(query: &str) -> Vec<String> {
+    query
+        .replace('"', "")
+        .split_whitespace()
+        .map(|t| t.chars().map(match_key).collect())
+        .collect()
+}
+// FTS matches without case and diacritics, so snippets locate terms the same way.
+// Each character maps to exactly one key, keeping key and text positions aligned.
+fn match_key(c: char) -> char {
+    if c.is_ascii() {
+        return c.to_ascii_lowercase();
+    }
+    match c.to_lowercase().next().unwrap_or(c) {
+        'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
+        'ď' | 'đ' => 'd',
+        'è'..='ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
+        'ì'..='ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' => 'i',
+        'ĺ' | 'ļ' | 'ľ' | 'ł' => 'l',
+        'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
+        'ò'..='ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
+        'ŕ' | 'ŗ' | 'ř' => 'r',
+        'ś' | 'ŝ' | 'ş' | 'š' => 's',
+        'ţ' | 'ť' => 't',
+        'ù'..='ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
+        'ý' | 'ÿ' => 'y',
+        'ź' | 'ż' | 'ž' => 'z',
+        other => other,
+    }
+}
+// Context around the earliest term occurrence. The stored document is decoded
+// incrementally and only until the snippet is complete; a document without a
+// visible match falls back to its beginning.
+fn snippet(payload: &[u8], terms: &[String]) -> Result<String> {
+    const BEFORE: usize = 90;
+    const AFTER: usize = 200;
+    if payload.len() > MAX_TEXT + 65536 {
+        bail!("Stored document exceeds compressed size limit");
+    }
+    let longest = terms.iter().map(String::len).max().unwrap_or(0);
+    let mut decoder = ZlibDecoder::new(payload);
+    let mut bytes = vec![0u8; 65536];
+    let (mut carry, mut text, mut keys) = (Vec::new(), String::new(), String::new());
+    // `found` and `searched` are byte offsets into `keys`.
+    let (mut total_bytes, mut searched, mut found) = (0, 0, None);
+    loop {
+        let n = decoder.read(&mut bytes)?;
+        total_bytes += n;
+        if total_bytes > MAX_TEXT {
+            bail!("Stored document exceeds text limit");
+        }
+        carry.extend_from_slice(&bytes[..n]);
+        let valid = match std::str::from_utf8(&carry) {
+            Ok(_) => carry.len(),
+            Err(e) if e.error_len().is_none() && n > 0 => e.valid_up_to(),
+            Err(_) => bail!("Stored document contains invalid UTF-8"),
+        };
+        let mut chunk = std::str::from_utf8(&carry[..valid])?;
+        text.push_str(chunk);
+        while !chunk.is_empty() {
+            // Lowercase ASCII runs in place; only other characters need the table.
+            let ascii = chunk
+                .bytes()
+                .position(|b| !b.is_ascii())
+                .unwrap_or(chunk.len());
+            let at = keys.len();
+            keys.push_str(&chunk[..ascii]);
+            keys[at..].make_ascii_lowercase();
+            chunk = &chunk[ascii..];
+            if let Some(c) = chunk.chars().next() {
+                keys.push(match_key(c));
+                chunk = &chunk[c.len_utf8()..];
+            }
+        }
+        carry.drain(..valid);
+        if found.is_none() && longest > 0 {
+            found = terms
+                .iter()
+                .filter_map(|t| keys[searched..].find(t.as_str()))
+                .min()
+                .map(|p| searched + p);
+            // A later chunk can only complete a term that starts in this tail.
+            searched = searched.max(keys.len().saturating_sub(longest - 1));
+            while !keys.is_char_boundary(searched) {
+                searched -= 1;
+            }
+        }
+        let done = match found {
+            Some(p) => keys[p..].chars().nth(AFTER).is_some(),
+            None => longest == 0 && text.chars().nth(AFTER).is_some(),
+        };
+        if n == 0 || done {
             break;
         }
     }
-    let begin = index.saturating_sub(90);
-    let end = index + 200;
+    let index = found.map_or(0, |p| keys[..p].chars().count());
+    let begin = index.saturating_sub(BEFORE);
     let mut characters = text.chars().skip(begin);
-    let selected = characters.by_ref().take(end - begin).collect::<String>();
+    let selected = characters
+        .by_ref()
+        .take(index + AFTER - begin)
+        .collect::<String>();
     let has_more = characters.next().is_some();
-    format!(
+    Ok(format!(
         "{}{}{}",
         if begin > 0 { "…" } else { "" },
         selected.split_whitespace().collect::<Vec<_>>().join(" "),
         if has_more { "…" } else { "" }
-    )
+    ))
 }

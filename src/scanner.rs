@@ -1,6 +1,6 @@
 use crate::{
     crypto, extract,
-    store::{ScanOptions, ScannedFile, Store},
+    store::{Content, IndexedFile, ScanOptions, ScannedFile, Store},
 };
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,8 +11,12 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::UNIX_EPOCH,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
+// Rows per catalog transaction while walking or importing. Larger batches mean
+// fewer synchronous commits; each still holds the store lock only briefly.
+pub const BATCH: usize = 2048;
+const COMMIT_INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Progress {
     pub id: String,
@@ -79,7 +83,7 @@ pub fn scan(
     };
     report(state.clone());
     let result = (|| -> Result<()> {
-        let mut batch = Vec::with_capacity(256);
+        let mut batch = Vec::with_capacity(BATCH);
         let mut errors = Vec::new();
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(false)
@@ -142,7 +146,7 @@ pub fn scan(
                 modified_ns: nanos,
             });
             state.current = relative;
-            if batch.len() == 256 {
+            if batch.len() == BATCH {
                 flush(
                     store,
                     &source.id,
@@ -200,6 +204,10 @@ fn flush(
     batch.clear();
     if index_content {
         state.phase = "extracting".into();
+        // Extract without holding the store lock and commit documents in groups,
+        // bounded by count, text size and time so progress persists regularly.
+        let mut pending = Vec::new();
+        let (mut bytes, mut since) = (0, Instant::now());
         for item in indexed {
             check(cancel)?;
             if !item.needs_text {
@@ -222,20 +230,38 @@ fn flush(
                 Err(e) => extract::Extracted::error(e.to_string()),
             };
             check(cancel)?;
-            store.lock().unwrap().record_content(
-                item.id,
-                &item.version,
-                &extracted.status,
-                &extracted.text,
-                &extracted.detail,
-            )?;
             if matches!(extracted.status.as_str(), "indexed" | "truncated") {
                 state.indexed += 1;
             }
+            bytes += extracted.text.len();
+            pending.push((item, extracted));
+            if pending.len() >= 256 || bytes >= 16 << 20 || since.elapsed() >= COMMIT_INTERVAL {
+                record(store, &mut pending)?;
+                (bytes, since) = (0, Instant::now());
+            }
             report(state.clone());
         }
+        record(store, &mut pending)?;
     }
     state.phase = "scanning".into();
     report(state.clone());
+    Ok(())
+}
+fn record(store: &SharedStore, pending: &mut Vec<(IndexedFile, extract::Extracted)>) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let items = pending
+        .iter()
+        .map(|(file, text)| Content {
+            id: file.id,
+            version: &file.version,
+            status: &text.status,
+            text: &text.text,
+            detail: &text.detail,
+        })
+        .collect::<Vec<_>>();
+    store.lock().unwrap().record_contents(&items)?;
+    pending.clear();
     Ok(())
 }

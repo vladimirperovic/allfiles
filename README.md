@@ -275,6 +275,39 @@ Windows izvršni fajl: **14,24 MiB → 6,18 MiB** (oko 57% manji). Katalog ostaj
 
 [Sirovi rezultati](experiments/results/2026-10-26-rust-app-windows.json) sadrže sve uzorke. `scripts/compare-http.py` proverava ukupan broj i redosled ID-jeva svakog odgovora i ne menja izvorne probne baze.
 
+### Optimizacija pretrage i indeksiranja (posle 0.3.0)
+
+Isti računar, katalog i postupak kao u prethodnoj tabeli: dva kruga sa obrnutim redosledom programa, 3 zagrevanja, 15 merenja po upitu i prosek medijana oba kruga. Poredi se Rust 0.3.0 pre i posle ovih izmena. Svaki odgovor ima isti ukupan broj i isti redosled ID-jeva kao pre izmena.
+
+| HTTP pretraga | Pre | Posle |
+|---|---:|---:|
+| Redak naziv | 1,470 ms | 1,505 ms |
+| Retka putanja | 1,228 ms | 1,258 ms |
+| Prva stranica bez upita | 0,537 ms | 0,498 ms |
+| Stranica od 90.000. stavke | 16,189 ms | 1,243 ms |
+| Čest naziv, 99.999 pogodaka | 131,078 ms | 8,418 ms |
+| Čest naziv, stranica od 90.000. stavke | 170,718 ms | 8,393 ms |
+| Jedno slovo, 100.000 pogodaka | 120,937 ms | 6,456 ms |
+| Sadržaj: redak pojam, 50 lokacija istog dokumenta | 5,005 ms | 4,560 ms |
+| Sadržaj: čest pojam, 50 lokacija istog dokumenta | 4,858 ms | 2,964 ms |
+
+Upis se meri kao vreme celog CLI procesa na istom računaru: dva kruga sa obrnutim redosledom programa, prikazan je prosek oba kruga. Ulaz je generisan: CSV sa 100.000 zapisa u 7.000 foldera i 3.000 malih tekstualnih dokumenata. Skeniranje sa sadržajem u verziji pre izmena jako zavisi od sinhronih upisa na disk; dva kruga trajala su 52,1 s i 80,6 s.
+
+| Upis (CLI, ceo proces) | Pre | Posle |
+|---|---:|---:|
+| Uvoz CSV-a sa 100.000 zapisa | 7,20 s | 3,54 s |
+| Ponovni uvoz istog CSV-a | 4,52 s | 1,31 s |
+| Skeniranje 3.000 dokumenata sa sadržajem | 66,36 s | 0,91 s |
+| Ponovno skeniranje bez promena | 0,20 s | 0,06 s |
+
+- **Pretraga naziva.** Trigram indeks je brz za retke pojmove. Za pojam koji se nalazi u skoro svakom nazivu SQLite je ipak proveravao i sortirao ceo katalog, i to dvaput: za ukupan broj i za stranicu. Kratka provera (oko 0,1–0,4 ms) sada za svaki pojam bira trigram indeks ili redom prolazi kroz indeks naziva; pojmovi kraći od tri znaka uvek koriste prolaz. Ukupan broj i tražena stranica dobijaju se u jednom prolazu, a podaci o folderu i mediju čitaju se samo za fajlove na stranici.
+- **Indeksiranje sadržaja.** Svaki dokument je bio zasebna transakcija; uz `synchronous=FULL` i dve baze to znači više sinhronih upisa na disk po dokumentu. Tekst se sada izdvaja bez zaključavanja kataloga i upisuje u grupama do 256 dokumenata, 16 MiB teksta ili 2 sekunde. Otkazivanje odbacuje samo tekst izdvojen posle poslednjeg upisa; sledeće skeniranje ga ponovo obrađuje.
+- **Uvoz i metapodaci.** SQL naredbe se pripremaju jednom po paketu, a paket ima 2.048 umesto 256 fajlova. Uvoz sa više medija završava sve medije u jednoj transakciji. U memoriji i dalje čeka najviše 4.096 uvezenih zapisa.
+- **Keš baze.** SQLite drži do 64 MiB stranica po bazi, umesto oko 2 MiB. Ponovljene pretrage ređe čitaju fajl, a kod šifrovanog kataloga ređe dešifruju. Memorija se zauzima samo za stranice koje su zaista pročitane.
+- **Isečci.** Isečak traži pojam bez razlike u velikim slovima i kvačicama, kao i pretraga: upit „kuca” sada prikazuje deo oko reči „Kuća”, a ne početak dokumenta. Dokument se raspakuje samo dok isečak nije potpun. Kod više pojmova isečak počinje kod pojma koji se u tekstu javlja prvi.
+
+Redak naziv je oko 0,03 ms sporiji zbog provere pojma. Merenje koristi zagrejan keš i nešifrovan katalog. Ne meri hladan disk, šifrovanje, raznovrsne velike dokumente, izdvajanje PDF/Office teksta ni RAM. Vreme upisa najviše zavisi od diska, pa kontejner ili USB disk mogu dati drugačiji odnos. [Sirovi rezultati](experiments/results/2026-10-26-rust-optimizations-windows.json) sadrže sve uzorke; ponavljaju se sa `scripts/compare-http.py` i `scripts/compare-writes.py`.
+
 ## Razvoj i build
 
 Koristi Rust **1.99.1** za ponovljivu izgradnju sa zaključanim `Cargo.lock`. Za nativni SQLite potreban je i C compiler: `base-devel` na Omarchy/Arch Linuxu, Xcode Command Line Tools na Macu, ili Visual Studio C++ Build Tools / llvm-mingw na Windowsu. SQLite izvor se kompajlira u program; korisniku ne treba poseban SQLite paket.
@@ -318,7 +351,7 @@ Upareno sintetičko merenje na istom Windows računaru, Go 1.26.10, oko 100.000 
 
 Poslednji red meri zaseban CSV izvoz, ne čitanje teksta iz 10.000 PDF dokumenata. Alokacije nisu vršna zauzetost RAM-a. Ovo su konkretni probni skupovi, ne garancija za stvarnu arhivu. Istorijska verzija `v0.2.0:review_benchmark_test.go` sadrži eksplicitne benchmarkove koji se ne pokreću u redovnim testovima.
 
-Preostala poboljšanja: paginacija kursorom za duboke stranice, jeftiniji ukupan broj rezultata za veoma široke upite, zaseban radni proces sa granicom vremena/memorije za nepouzdane PDF-ove i izvoz sa napretkom/otkazivanjem. PDF biblioteka može obraditi celu jednu stranicu pre provere našeg limita, pa granice ulaza/izdvojenog teksta nisu stroga izolacija parsera. Osnovna aplikacija je i dalje namenjena lokalnom radu; objava na javnom serveru zahteva posebno rešenu autentifikaciju i HTTPS.
+Preostala poboljšanja: paginacija kursorom za veoma duboke stranice, čitanje koje ne čeka transakciju indeksiranja (sada jedna brava redom propušta zahteve), zaseban radni proces sa granicom vremena/memorije za nepouzdane PDF-ove i izvoz sa napretkom/otkazivanjem. PDF biblioteka može obraditi celu jednu stranicu pre provere našeg limita, pa granice ulaza/izdvojenog teksta nisu stroga izolacija parsera. Osnovna aplikacija je i dalje namenjena lokalnom radu; objava na javnom serveru zahteva posebno rešenu autentifikaciju i HTTPS.
 
 Istorijski izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
 

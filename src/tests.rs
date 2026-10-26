@@ -535,3 +535,110 @@ fn mcp_validation_and_open_boundary() -> anyhow::Result<()> {
     assert!(crate::server::validate_open(&f, false).is_err());
     Ok(())
 }
+#[test]
+fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let src = s.begin_scan(&ScanOptions {
+        root: "demo://hybrid".into(),
+        ..Default::default()
+    })?;
+    let entries = (0..1500)
+        .map(|i| {
+            let name = format!("{} {i:04}.txt", if i % 3 == 0 { "Plan" } else { "Drawing" });
+            let dir = if i % 500 == 0 {
+                "Rare/Needle".to_owned()
+            } else {
+                format!("Dir {}", i % 7)
+            };
+            ScannedFile {
+                relative: format!("{dir}/{name}"),
+                dir,
+                ..entry(&name)
+            }
+        })
+        .collect::<Vec<_>>();
+    s.upsert(&src.id, "scan", &entries)?;
+    s.finish_scan(&src.id, "scan", true)?;
+    // "drawing" exceeds the trigram threshold, "dr" is too short for trigrams,
+    // "needle" and "0003" are selective; all must match an independent query.
+    for query in ["drawing", "dr", "needle", "plan 0003", "dir draw", "zzz"] {
+        let mut sql =
+            "SELECT f.id FROM files f JOIN directories d ON d.id=f.dir_id WHERE 1=1".to_owned();
+        let terms = query.split_whitespace().collect::<Vec<_>>();
+        for _ in &terms {
+            sql.push_str(" AND (f.search_name GLOB ? OR d.search_path GLOB ?)");
+        }
+        let args = terms
+            .iter()
+            .flat_map(|t| [format!("*{t}*"), format!("*{t}*")])
+            .collect::<Vec<_>>();
+        sql.push_str(" ORDER BY f.search_name,f.id");
+        let expected = s
+            .conn
+            .prepare(&sql)?
+            .query_map(rusqlite::params_from_iter(&args), |r| r.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for offset in [0, 7, 990] {
+            let found = s.search(SearchOptions {
+                query: query.into(),
+                offset,
+                limit: 25,
+                ..Default::default()
+            })?;
+            assert_eq!(found.total, expected.len() as i64, "{query}");
+            let page = expected.iter().skip(offset as usize).take(25).copied();
+            assert!(
+                found.results.iter().map(|f| f.id).eq(page),
+                "{query} @{offset}"
+            );
+        }
+    }
+    let blank = s.search(SearchOptions {
+        offset: 1490,
+        sort: "size".into(),
+        ..Default::default()
+    })?;
+    assert_eq!((blank.total, blank.results.len()), (1500, 10));
+    Ok(())
+}
+#[test]
+fn snippets_ignore_diacritics_and_stop_early() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let src = s.begin_scan(&ScanOptions {
+        root: "demo://snippets".into(),
+        ..Default::default()
+    })?;
+    let f = s.upsert(&src.id, "scan", &[entry("kuca.txt")])?.remove(0);
+    let text = format!(
+        "{} Projekat: Velika KUĆA na obali. {}",
+        "uvod ".repeat(40),
+        "kraj ".repeat(200_000)
+    );
+    s.record_content(f.id, &f.version, "indexed", &text, "")?;
+    let found = s.search(SearchOptions {
+        query: "kuca".into(),
+        mode: "content".into(),
+        ..Default::default()
+    })?;
+    assert_eq!(found.total, 1);
+    let snippet = &found.results[0].snippet;
+    assert!(
+        snippet.starts_with('…') && snippet.ends_with('…'),
+        "{snippet}"
+    );
+    assert!(snippet.contains("Velika KUĆA na obali."), "{snippet}");
+    let all = s.search(SearchOptions {
+        mode: "content".into(),
+        ..Default::default()
+    })?;
+    assert!(all.results[0].snippet.starts_with("uvod uvod"));
+    for (name, folded) in [
+        ("ČAROBNI Đak šuma Žena ć", "carobni djak suma zena c"),
+        ("Plan A", "plan a"),
+    ] {
+        assert_eq!(fold(name), folded);
+    }
+    Ok(())
+}

@@ -122,7 +122,7 @@ pub fn import(
             state.current = record.file.relative.clone();
             group.entries.push(record.file);
             pending += 1;
-            if group.entries.len() >= 256 {
+            if group.entries.len() >= scanner::BATCH {
                 flush(store, group, &mut pending, &mut state, cancel, report)?;
             }
             if pending >= 4096 {
@@ -139,17 +139,14 @@ pub fn import(
         unchanged(&path, &before)?;
         Ok(())
     })();
-    let complete = result.is_ok();
-    let mut finish = Ok(());
-    for group in groups.values() {
-        let r = store
-            .lock()
-            .unwrap()
-            .finish_scan(&group.source.id, &state.id, complete);
-        if finish.is_ok() {
-            finish = r;
-        }
-    }
+    let sources = groups
+        .values()
+        .map(|g| g.source.id.as_str())
+        .collect::<Vec<_>>();
+    let finish = store
+        .lock()
+        .unwrap()
+        .finish_scans(&sources, &state.id, result.is_ok());
     result.and(finish)
 }
 fn unchanged(path: &Path, before: &fs::Metadata) -> Result<()> {
