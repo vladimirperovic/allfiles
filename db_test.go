@@ -228,6 +228,14 @@ func TestDatabaseScanReconciliationIsSourceScoped(t *testing.T) {
 // BenchmarkCatalog100K measures real SQLite query latency after a 100,000-file
 // synthetic import. Run explicitly with -run '^$' -bench BenchmarkCatalog100K.
 func BenchmarkCatalog100K(b *testing.B) {
+	benchmarkCatalog100K(b, false)
+}
+
+func BenchmarkEncryptedCatalog100K(b *testing.B) {
+	benchmarkCatalog100K(b, true)
+}
+
+func benchmarkCatalog100K(b *testing.B, encrypted bool) {
 	b.StopTimer()
 	store, err := OpenStore(b.TempDir())
 	if err != nil {
@@ -270,6 +278,24 @@ func BenchmarkCatalog100K(b *testing.B) {
 		b.Fatal(err)
 	}
 	b.Logf("100k import: %s; catalog.sqlite=%d bytes (%.2f MiB), %.1f bytes/file; content.sqlite absent (metadata only)", time.Since(started).Round(time.Millisecond), metadata.Size(), float64(metadata.Size())/(1<<20), float64(metadata.Size())/count)
+	if encrypted {
+		destination := filepath.Join(b.TempDir(), "protected")
+		password := []byte("synthetic benchmark passphrase")
+		defer clear(password)
+		if _, err := store.ExportProtected(destination, false, password); err != nil {
+			b.Fatal(err)
+		}
+		store, err = OpenStoreWithPassword(destination, password)
+		if err != nil {
+			b.Fatal(err)
+		}
+		defer store.Close()
+		metadata, err = os.Stat(filepath.Join(destination, "catalog.sqlite"))
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Logf("Encrypted compacted copy: catalog.sqlite=%d bytes (%.2f MiB), plus encryption.json", metadata.Size(), float64(metadata.Size())/(1<<20))
+	}
 	queries := []struct{ name, query string }{{"rare_name", "unique-needle-78901"}, {"rare_path", "Rare-path-needle"}}
 	for _, query := range queries {
 		b.Run(query.name, func(b *testing.B) {

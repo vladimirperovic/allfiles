@@ -12,6 +12,7 @@ exports/
 browser-profile/
 *.log
 .allfiles.lock
+encryption.json
 
 # Generated executables, archives, previews and caches.
 /allfiles

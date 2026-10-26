@@ -101,7 +101,9 @@ WinCatalog izvoz možeš dodati kasnije. Za početak koristi CSV izvoz; uvoznik 
 
 Interfejs razdvaja pretragu naziva/putanje od pretrage sadržaja. Filteri pomažu da suziš rezultate prema mediju i tipu fajla. Rezultat pokazuje gde se fajl nalazi; za sam dokument moraš priključiti odgovarajući medij.
 
-Dugme **Izgled** nezavisno podešava pozadinu i boju tabela i kartica. Svaka grupa ima šest paleta: Original, Kobalt, Ametist, Šljiva, Petrol i Grafit — ukupno 36 kombinacija. Izbor se pamti u adresi stranice (`?theme=grafit&table=petrol`); sačuvaj tu adresu kao bookmark ako želiš isti izgled pri sledećem otvaranju. Naziv fajla i njegov folder imaju zasebne redove, a lista se pomera unutar tabele.
+Interfejs koristi jedinstven tamni **Grafit** izgled, sa belim slovima i sitnim crvenim akcentima. Svaki red tabele ima neprekinut gradijent preko cele širine. Naziv fajla i njegov folder imaju zasebne redove, a lista se pomera unutar tabele.
+
+Katanac iznad statistike pokazuje da li je trenutna baza šifrovana. Diskretne tačkice u pozadini struje poput vetra i reaguju na miš. Dugme **Animacija**, pored „Dodaj medij”, zaustavlja/pokreće kretanje i pamti izbor samo u tom browseru. Efekat koristi najviše 600 tačkica (180 na uskom ekranu), 30 iscrtavanja u sekundi i ograničenu rezoluciju platna. U skrivenom tabu, van vidljivog dela stranice i uz sistemsko smanjeno kretanje animacija miruje. Nema dodatnih biblioteka ni mrežnih zahteva.
 
 Za konzistentnu kopiju podataka koristi izvoz kada nema aktivnog skeniranja ili uvoza:
 
@@ -113,7 +115,44 @@ Za konzistentnu kopiju podataka koristi izvoz kada nema aktivnog skeniranja ili 
 
 Odredište mora biti **nov folder** unutar postojećeg direktorijuma; izvoz odbija da prepiše postojeći folder. Za izvoz samo kataloga dodaj `--catalog-only`. Takva kopija omogućava pretragu fajlova, ali nema tekst njihovih dokumenata. Izvoz pravi podatke; odgovarajući izvršni fajl kopiraj uz njih zasebno. Isti katalog koristi se na različitim operativnim sistemima.
 
-**Izvezeni SQLite fajlovi nisu automatski šifrovani.** Odredište treba da bude u šifrovanom kontejneru ili na mediju čiju zaštitu si sam podesio. Za kompletnu rezervnu kopiju sa sadržajem potrebne su obe baze. Nemoj kopirati samo glavni `.sqlite` fajl dok aplikacija radi, jer mogu postojati prateći SQLite fajlovi sa još nezavršenim zapisima.
+**Običan izvoz zadržava zaštitu izvornog kataloga.** Ako izvor nema lozinku, ni običan izvoz nije šifrovan. Ako je izvor šifrovan, izvoz ostaje šifrovan istom lozinkom i uključuje `encryption.json`. Za kompletnu rezervnu kopiju sa sadržajem potrebne su obe baze i, kod šifrovanog kataloga, taj prateći fajl. Koristi zaštićeno odredište i nemoj kopirati samo glavni `.sqlite` fajl dok aplikacija radi.
+
+## Opciona lozinka kataloga
+
+Možeš dodatno zaštititi same baze lozinkom, nezavisno od VeraCrypt kontejnera. AllFiles koristi **Adiantum šifrovanje podataka na disku**; baze se čitaju i menjaju direktno kroz sloj za šifrovanje, bez pravljenja nešifrovane radne kopije.
+
+U otvorenoj aplikaciji izaberi **Spakuj za USB → Šifruj kopiju lozinkom**, unesi novi folder i potvrdi lozinku. Ako je trenutni katalog već šifrovan, izvoz podrazumevano zadržava njegovu lozinku; opcija **Nova lozinka za kopiju** postavlja drugu samo za novi folder. Katanac prikazuje zaštitu trenutno otvorenog kataloga, a oznaka **Baza** u vrhu zbir veličina obe baze.
+
+Zatvori pokrenuti AllFiles, pa napravi novu šifrovanu kopiju:
+
+```bash
+./allfiles-linux-amd64 encrypt \
+  --data "$PWD/data" \
+  --out "$PWD/data-protected"
+```
+
+Odredišni folder ne sme već postojati. Program traži novu lozinku i njenu potvrdu u terminalu, bez prikazivanja znakova. Lozinka mora imati najmanje 12 znakova i najviše 1024 UTF-8 bajta. Za kopiju bez sadržaja dokumenata dodaj `--catalog-only`. Ako je izvor već zaštićen, prvo unosiš njegovu postojeću lozinku, a zatim novu lozinku kopije; tako možeš napraviti katalog sa promenjenom lozinkom.
+
+**Izvorni katalog ostaje nepromenjen.** Ako je bio nešifrovan, ta izvorna kopija i dalje postoji bez zaštite lozinkom. Za dalji rad otvori novi folder:
+
+```bash
+./allfiles-linux-amd64 serve --data "$PWD/data-protected" --no-browser
+```
+
+Komande koje otvaraju zaštićeni katalog automatski traže lozinku u interaktivnom terminalu. Lozinka se ne prosleđuje kao argument, promenljiva okruženja, preko preusmerenog ulaza ili MCP-a. Servis se pokreće tek nakon uspešnog otključavanja. Običan `export` takvog kataloga zadržava istu lozinku.
+
+Sačuvaj zajedno:
+
+```text
+data-protected/
+  catalog.sqlite
+  content.sqlite       ← ako indeksiraš sadržaj dokumenata
+  encryption.json      ← obavezan deo šifrovanog kataloga
+```
+
+`encryption.json` ne sadrži lozinku. Sadrži verziju formata, nasumični salt i parametre potrebne za izvođenje ključeva. **Bez odgovarajućeg fajla i lozinke katalog se ne može otvoriti; nema oporavka zaboravljene lozinke.** U formatu v1 koristi se Argon2id sa 3 prolaza, 64 MiB memorije i paralelizmom 4, uz novi nasumični salt za zaštićenu kopiju. HKDF-SHA256 zatim izvodi odvojene ključeve za katalog i bazu sadržaja.
+
+Adiantum štiti poverljivost sačuvanih podataka, ali ne pruža kriptografsku potvrdu da ih neko nije zlonamerno izmenio. Dok je AllFiles otključan, njegov lokalni web interfejs i povezani MCP klijent mogu dobiti podatke. VeraCrypt ostaje koristan za druge fajlove, profile browsera i rezervne kopije koje nisu obuhvaćene šifrovanjem baza. [Dokumentacija Adiantum VFS-a](https://pkg.go.dev/github.com/ncruces/go-sqlite3/vfs/adiantum)
 
 ## Povezivanje sa AI klijentom preko MCP-a
 
@@ -168,7 +207,7 @@ Skeniranje zahteva da je izvorni folder dostupan računaru na kome radi servis. 
 
 ## VeraCrypt i privatnost
 
-AllFiles ne montira VeraCrypt, ne traži lozinku kontejnera i sam ne šifruje SQLite. Zaštitu pruža kontejner u koji smestiš direktorijum `--data`. Dok je kontejner otključan, programi sa odgovarajućim pravima mogu čitati podatke.
+AllFiles ne montira VeraCrypt i ne traži lozinku kontejnera. VeraCrypt štiti direktorijum u koji smestiš `--data`; opciona lozinka AllFiles kataloga dodatno štiti njegove baze. Kada su kontejner i katalog otključani, aplikacija može čitati podatke.
 
 - Drži baze, radne fajlove i njihove rezervne kopije u kontejneru. AllFiles svoje privremene podatke drži pod direktorijumom podataka.
 - Za poverljiv rad koristi šifrovan sistemski disk i proveri zaštitu swap prostora i hibernacije. Kontejner ne uklanja tragove iz RAM-a ili drugih aplikacija.
@@ -212,7 +251,7 @@ go vet ./...
 go build -trimpath -ldflags="-s -w" -o allfiles .
 ```
 
-Web interfejs ugrađuje se u izvršni fajl. SQLite koristi `modernc.org/sqlite`, bez C toolchaina. Nakon promene interfejsa ponovo izgradi program.
+Web interfejs ugrađuje se u izvršni fajl. SQLite koristi `github.com/ncruces/go-sqlite3`, bez C toolchaina. Nakon promene interfejsa ponovo izgradi program.
 
 Za svih pet ciljnih platformi:
 
@@ -236,11 +275,13 @@ Opciona verzija: `sh scripts/build.sh 0.1.0` ili `.\scripts\build.ps1 -Version 0
 | `allfiles-darwin-amd64` | macOS na Intel procesorima |
 | `allfiles-windows-amd64.exe` | Windows na Intel/AMD računarima |
 
-GitHub Actions pokreće testove na Linuxu, Windowsu i macOS-u, a zatim pravi ovih pet izvršnih fajlova sa `CGO_ENABLED=0`. Svaki artifact sadrži arhivu programa, README i SHA-256 kontrolni zbir. Arhive se čuvaju 30 dana; workflow ne objavljuje automatski release. Build ne uključuje tvoje kataloge. Baze, lokalni izvozi, browser profili i privremeni fajlovi izuzeti su preko `.gitignore`; lične fajlove ne dodaj ručno u Git.
+GitHub Actions pokreće testove na Linuxu, Windowsu i macOS-u, a zatim uvek gradi i pakuje ovih pet izvršnih fajlova sa `CGO_ENABLED=0`. Čuvanje Actions artifact-a je opciono: pri ručnom pokretanju workflow-a uključi `upload_artifacts` (podrazumevano isključeno). Tako se testovi i build ne oslanjaju na raspoloživu kvotu za čuvanje artifact-a. Uključeni artifact-i sadrže arhivu programa, README i SHA-256 kontrolni zbir i čuvaju se 30 dana. Arhive za preuzimanje objavljuju se zasebno kroz GitHub Releases; workflow ih ne objavljuje automatski. Build ne uključuje tvoje kataloge. Baze, lokalni izvozi, browser profili i privremeni fajlovi izuzeti su preko `.gitignore`; lične fajlove ne dodaj ručno u Git.
 
 ## Granice prve verzije
 
-Probno merenje na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u katalogu, bez teksta dokumenata. Dva selektivna upita po nazivu i putanji trajala su prosečno **2,9–3,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
+Probno merenje na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
+
+Šifrovana kopija istog probnog kataloga dala je takođe **2,0–2,1 ms** za ove upite u 30 ponavljanja sa zagrejanim kešom. Ovo ne meri prvo otključavanje, čitanje sa hladnog diska ili trošak skeniranja i upisa. Ponovljivo merenje: `go test -v -run '^$' -bench BenchmarkEncryptedCatalog100K -benchtime 30x -count 1`.
 
 - Vreme skeniranja, veličinu baze i brzinu pretrage treba izmeriti na stvarnoj arhivi. Nema izmišljenih obećanja o milionima fajlova ili određenom broju megabajta.
 - OCR, automatsko otkrivanje duplikata po sadržaju, direktno upravljanje LTO kasetama i automatska sinhronizacija između računara nisu uključeni.

@@ -8,6 +8,8 @@
   const kindNames = { computer: 'Računar', external: 'Eksterni disk', bluray: 'Blu-ray / DVD', lto: 'LTO kaseta', folder: 'Folder' };
   const kindIcons = { computer: 'laptop', external: 'drive', bluray: 'disc', lto: 'drive', folder: 'folder' };
   const state = { token: null, status: null, sources: [], results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', detailsRequest: 0, ready: false };
+  let exportRequestPayload = null;
+  let exportInProgress = false;
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -117,10 +119,25 @@
     $('#stat-size').textContent = fmtBytes(status.bytes);
     $('#stat-sources').textContent = number.format(status.sources || 0);
     $('#stat-documents').textContent = number.format(status.documents || 0);
-    $('#database-size').textContent = `Katalog ${fmtBytes(status.catalog_bytes)} · Sadržaj ${fmtBytes(status.content_bytes)}`;
+    const databaseBreakdown = `Katalog ${fmtBytes(status.catalog_bytes)} · Sadržaj ${fmtBytes(status.content_bytes)}`;
+    $('#database-size').textContent = databaseBreakdown;
+    const databaseBadge = $('#database-size-badge');
+    databaseBadge.textContent = `Baza ${fmtBytes((Number(status.catalog_bytes) || 0) + (Number(status.content_bytes) || 0))}`;
+    databaseBadge.title = databaseBreakdown;
+    databaseBadge.setAttribute('aria-label', `Ukupna veličina baze. ${databaseBreakdown}`);
     $('#version-label').textContent = `AllFiles ${status.version || ''} · lokalno`;
     $('#data-dir').textContent = status.data_dir || '—';
-    $('#demo-badge').hidden = !status.demo;
+    $('#search-eyebrow').textContent = status.demo ? 'DEMO KATALOG · SVE NA SVOM MESTU' : 'SVE NA SVOM MESTU';
+    const encryptionLabel = status.encrypted ? 'Baza je šifrovana' : 'Baza nije šifrovana';
+    const encryptionIcon = $('#catalog-encryption-icon');
+    encryptionIcon.setAttribute('aria-label', encryptionLabel);
+    encryptionIcon.title = encryptionLabel;
+    encryptionIcon.dataset.encrypted = String(Boolean(status.encrypted));
+    $('use', encryptionIcon).setAttribute('href', status.encrypted ? '#i-lock' : '#i-unlock');
+    $('#encryption-status').hidden = !status.encrypted;
+    $('#privacy-title').textContent = status.encrypted ? 'Katalog je šifrovan.' : 'Lokalno. Lično.';
+    $('#privacy-description').textContent = status.encrypted ? 'Otključan u ovoj sesiji.' : 'Vaši fajlovi ostaju vaši.';
+    updateExportEncryption();
     $('#nav-job-dot').hidden = !state.busy;
     renderJob(status.job);
     const finished = oldJob && jobRunning(oldJob) && !jobRunning(status.job);
@@ -181,7 +198,7 @@
       const option = element('option', '', source.label); option.value = String(source.id); sourceFilter.append(option);
       const sideButton = element('button', 'sidebar-source');
       sideButton.title = source.label;
-      sideButton.append(icon(kindIcons[source.kind] || 'drive'), element('span', 'source-name', source.label), element('span', 'source-color-dot'));
+      sideButton.append(icon(kindIcons[source.kind] || 'drive'), element('span', 'source-name', source.label));
       sideButton.dataset.sourceId = source.id;
       sideButton.addEventListener('click', () => filterToSource(source.id));
       sidebar.append(sideButton);
@@ -377,6 +394,11 @@
   function openDialog(id) {
     const dialog = $(id);
     $$('.form-error', dialog).forEach(error => { error.hidden = true; error.textContent = ''; });
+    if (id === '#export-dialog') {
+      clearExportSecrets();
+      $('#export-encrypt').checked = false;
+      updateExportEncryption();
+    }
     dialog.showModal();
   }
   function sourceDialog(source = null) {
@@ -413,9 +435,48 @@
     $('#import-dialog').close(); setView('index'); toast('Uvoz kataloga je pokrenut.');
     await refreshStatus();
   }
+  function clearExportSecrets() {
+    $('#export-password').value = '';
+    $('#export-password-repeat').value = '';
+    if (exportRequestPayload) exportRequestPayload.password = '';
+  }
+  function updateExportEncryption() {
+    const encrypted = Boolean(state.status?.encrypted);
+    const enabled = $('#export-encrypt').checked;
+    $('#export-encrypt-label').textContent = encrypted ? 'Nova lozinka za kopiju' : 'Šifruj kopiju lozinkom';
+    $('#export-encrypt-description').textContent = encrypted
+      ? 'Kopija ostaje šifrovana postojećom lozinkom. Uključite samo ako želite novu lozinku za kopiju.'
+      : 'Novi folder sadržaće šifrovanu kopiju. Postojeći katalog se ne menja.';
+    $('#export-password-fields').hidden = !enabled;
+    $('#export-encrypt').setAttribute('aria-expanded', String(enabled));
+    $('#export-encrypt').disabled = exportInProgress;
+    ['#export-password', '#export-password-repeat'].forEach(selector => {
+      $(selector).required = enabled;
+      $(selector).disabled = !enabled || exportInProgress;
+    });
+  }
   async function exportCatalog() {
-    const result = await api('/api/export', { method: 'POST', body: { destination: $('#export-destination').value.trim(), include_content: $('#export-content').checked } });
-    $('#export-dialog').close(); toast(`Kopija baze je sačuvana: ${result.path || result.destination || $('#export-destination').value}`, false, true);
+    const encrypt = $('#export-encrypt').checked;
+    let password = encrypt ? $('#export-password').value : '';
+    if (encrypt && [...password].length < 12) throw new Error('Lozinka mora imati najmanje 12 znakova. Razmaci su dozvoljeni.');
+    if (encrypt && password !== $('#export-password-repeat').value) throw new Error('Lozinke se ne podudaraju. Unesite istu lozinku u oba polja.');
+    const payload = { destination: $('#export-destination').value.trim(), include_content: $('#export-content').checked, encrypt, password };
+    exportRequestPayload = payload;
+    password = '';
+    exportInProgress = true;
+    updateExportEncryption();
+    try {
+      const result = await api('/api/export', { method: 'POST', body: payload });
+      clearExportSecrets();
+      $('#export-dialog').close();
+      toast(`${result.encrypted ? 'Šifrovana kopija' : 'Kopija baze'} je sačuvana: ${result.path || result.destination || payload.destination}`, false, true);
+    } finally {
+      clearExportSecrets();
+      payload.password = '';
+      exportRequestPayload = null;
+      exportInProgress = false;
+      updateExportEncryption();
+    }
   }
   async function browse(path) {
     $('#browse-error').hidden = true;
@@ -461,7 +522,12 @@
     if (action === 'import') openDialog('#import-dialog');
     if (action === 'export') openDialog('#export-dialog');
     if (action === 'shutdown') openDialog('#shutdown-dialog');
-    const close = event.target.closest('[data-close-dialog]'); if (close) close.closest('dialog').close();
+    const close = event.target.closest('[data-close-dialog]');
+    if (close) {
+      const dialog = close.closest('dialog');
+      if (dialog.id === 'export-dialog') clearExportSecrets();
+      dialog.close();
+    }
     const modeButton = event.target.closest('[data-mode]');
     if (modeButton) {
       state.mode = modeButton.dataset.mode;
@@ -481,6 +547,9 @@
   $('#source-form').addEventListener('submit', event => submitForm(event, '#source-form-error', startScan));
   $('#import-form').addEventListener('submit', event => submitForm(event, '#import-form-error', startImport));
   $('#export-form').addEventListener('submit', event => submitForm(event, '#export-form-error', exportCatalog));
+  $('#export-encrypt').addEventListener('change', () => { if (!$('#export-encrypt').checked) clearExportSecrets(); updateExportEncryption(); });
+  $('#export-dialog').addEventListener('close', clearExportSecrets);
+  $('#export-dialog').addEventListener('cancel', clearExportSecrets);
   $('#cancel-job').addEventListener('click', async () => { $('#cancel-job').disabled = true; try { await api('/api/cancel', { method: 'POST', body: {} }); toast('Zatraženo je zaustavljanje indeksiranja.'); await refreshStatus(); } catch (error) { toast(error.message, true); $('#cancel-job').disabled = false; } });
   $('#browse-source').addEventListener('click', () => { openDialog('#browse-dialog'); browse($('#source-root').value.trim()); });
   $('#browse-form').addEventListener('submit', event => { event.preventDefault(); browse($('#browse-path').value.trim()); });

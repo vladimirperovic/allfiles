@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/ncruces/go-sqlite3/vfs"
 )
 
 type Source struct {
@@ -51,13 +51,15 @@ type FileResult struct {
 	root         string
 }
 type Store struct {
-	DataDir   string
-	mu        sync.Mutex
-	db        *sql.DB
-	conn      *sql.Conn
-	attached  bool
-	catalogID string
-	identity  os.FileInfo
+	DataDir    string
+	mu         sync.Mutex
+	db         *sql.DB
+	conn       *sql.Conn
+	attached   bool
+	catalogID  string
+	identity   os.FileInfo
+	encryption *encryptionState
+	vfsName    string
 }
 
 func randomID() string {
@@ -71,6 +73,9 @@ func fold(s string) string {
 	return strings.NewReplacer("č", "c", "ć", "c", "š", "s", "ž", "z", "đ", "dj").Replace(strings.ToLower(s))
 }
 func OpenStore(dir string) (*Store, error) {
+	return OpenStoreWithPassword(dir, nil)
+}
+func OpenStoreWithPassword(dir string, password []byte) (*Store, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -79,18 +84,64 @@ func OpenStore(dir string) (*Store, error) {
 	if err != nil || !info.IsDir() {
 		return nil, fmt.Errorf("Direktorijum podataka mora već postojati: %s", abs)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(abs, "catalog.sqlite"))
+	if _, err := os.Stat(filepath.Join(abs, ".allfiles-export-incomplete")); err == nil {
+		return nil, errors.New("Ovaj izvoz nije dovršen. Otvorite izvorni katalog i ponovite izvoz u novi folder.")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	manifest, err := readEncryptionManifest(abs)
 	if err != nil {
+		return nil, err
+	}
+	var encryption *encryptionState
+	if manifest != nil {
+		if len(password) == 0 {
+			return nil, ErrPasswordRequired
+		}
+		catalog, e := os.Stat(filepath.Join(abs, "catalog.sqlite"))
+		if e != nil || catalog.Size() == 0 {
+			return nil, errors.New("Enkriptovani katalog nedostaje ili je nepotpun. Vratite odgovarajuću rezervnu kopiju.")
+		}
+		encryption, err = deriveEncryption(*manifest, password)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(password) != 0 {
+		return nil, errors.New("Ovaj katalog nije enkriptovan. Napravite novu enkriptovanu kopiju pomoću izvoza.")
+	}
+	vfsName, err := registerEncryptionVFS(abs, encryption)
+	if err != nil {
+		encryption.clear()
+		return nil, err
+	}
+	db, err := openSQLite(filepath.Join(abs, "catalog.sqlite"), vfsName)
+	if err != nil {
+		vfs.Unregister(vfsName)
+		encryption.clear()
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
 	conn, err := db.Conn(context.Background())
 	if err != nil {
 		db.Close()
+		vfs.Unregister(vfsName)
+		encryption.clear()
+		if encryption != nil {
+			return nil, ErrInvalidPassword
+		}
 		return nil, err
 	}
-	s := &Store{DataDir: abs, db: db, conn: conn, identity: info}
-	schema := `PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY;
+	s := &Store{DataDir: abs, db: db, conn: conn, identity: info, encryption: encryption, vfsName: vfsName}
+	// Verify the schema can be read before any DDL, journal changes or writes.
+	var tableCount int
+	if err = conn.QueryRowContext(context.Background(), `SELECT count(*) FROM sqlite_schema`).Scan(&tableCount); err != nil {
+		s.Close()
+		if encryption != nil {
+			return nil, ErrInvalidPassword
+		}
+		return nil, err
+	}
+	schema := `PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA temp_store=MEMORY; PRAGMA trusted_schema=ON;
  CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,root TEXT NOT NULL,label TEXT NOT NULL,kind TEXT NOT NULL,location TEXT NOT NULL DEFAULT '',last_scan TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'new',UNIQUE(root,label));
  CREATE TABLE IF NOT EXISTS directories(id INTEGER PRIMARY KEY,source_id TEXT NOT NULL REFERENCES sources(id),path TEXT NOT NULL,search_path TEXT NOT NULL,UNIQUE(source_id,path));
@@ -127,6 +178,9 @@ func OpenStore(dir string) (*Store, error) {
 }
 
 func (s *Store) checkDataDir() error {
+	if s.conn == nil {
+		return errors.New("Katalog je zatvoren.")
+	}
 	now, e := os.Stat(s.DataDir)
 	if e != nil || !os.SameFile(s.identity, now) {
 		return errors.New("Direktorijum podataka više nije isti ili nije dostupan. Ponovo montirajte kontejner i pokrenite aplikaciju.")
@@ -136,11 +190,20 @@ func (s *Store) checkDataDir() error {
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
 	if s.conn != nil {
-		s.conn.Close()
+		err = s.conn.Close()
+		s.conn = nil
 	}
-	return s.db.Close()
+	if s.db != nil {
+		err = errors.Join(err, s.db.Close())
+		s.db = nil
+	}
+	vfs.Unregister(s.vfsName)
+	s.encryption.clear()
+	return err
 }
+func (s *Store) Encrypted() bool { return s.encryption != nil }
 func (s *Store) ensureContent(create bool) error {
 	if e := s.checkDataDir(); e != nil {
 		return e
@@ -154,7 +217,7 @@ func (s *Store) ensureContent(create bool) error {
 			return os.ErrNotExist
 		}
 	}
-	_, err := s.conn.ExecContext(context.Background(), `ATTACH DATABASE ? AS content`, p)
+	_, err := s.conn.ExecContext(context.Background(), `ATTACH DATABASE ? AS content`, sqliteURI(p, s.vfsName))
 	if err != nil {
 		return err
 	}
@@ -512,7 +575,7 @@ func (s *Store) Stats() (map[string]any, error) {
 		}
 		return v.Size()
 	}
-	return map[string]any{"version": Version, "data_dir": s.DataDir, "demo": demo == "true", "files": count, "bytes": total, "documents": docs, "sources": src, "catalog_bytes": size("catalog.sqlite"), "content_bytes": size("content.sqlite"), "fts5": true}, nil
+	return map[string]any{"version": Version, "data_dir": s.DataDir, "demo": demo == "true", "files": count, "bytes": total, "documents": docs, "sources": src, "catalog_bytes": size("catalog.sqlite"), "content_bytes": size("content.sqlite"), "fts5": true, "encrypted": s.Encrypted()}, nil
 }
 
 type SearchOptions struct {
@@ -755,6 +818,25 @@ func (s *Store) File(ctx context.Context, id int64) (FileResult, string, error) 
 func (s *Store) Export(destination string, includeContent bool) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	encryption := s.encryption.clone()
+	defer encryption.clear()
+	return s.exportLocked(destination, includeContent, encryption)
+}
+
+// ExportProtected creates a separate encrypted copy. The source is never
+// converted or removed, and no plaintext intermediate copy is written.
+func (s *Store) ExportProtected(destination string, includeContent bool, password []byte) (string, error) {
+	encryption, err := newEncryption(password)
+	if err != nil {
+		return "", err
+	}
+	defer encryption.clear()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.exportLocked(destination, includeContent, encryption)
+}
+
+func (s *Store) exportLocked(destination string, includeContent bool, encryption *encryptionState) (result string, resultErr error) {
 	if e := s.checkDataDir(); e != nil {
 		return "", e
 	}
@@ -779,11 +861,76 @@ func (s *Store) Export(destination string, includeContent bool) (string, error) 
 	if e = os.Mkdir(abs, 0700); e != nil {
 		return "", e
 	}
-	if _, e = s.conn.ExecContext(context.Background(), `VACUUM main INTO ?`, filepath.Join(abs, "catalog.sqlite")); e != nil {
+	directoryInfo, e := os.Stat(abs)
+	if e != nil {
+		return "", e
+	}
+	owned := make(map[string]os.FileInfo)
+	create := func(name string, data []byte) error {
+		p := filepath.Join(abs, name)
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return err
+		}
+		if info, err := f.Stat(); err == nil {
+			owned[name] = info
+		}
+		_, writeErr := f.Write(data)
+		return errors.Join(writeErr, f.Sync(), f.Close())
+	}
+	const incomplete = ".allfiles-export-incomplete"
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		now, err := os.Stat(abs)
+		if err != nil || !os.SameFile(directoryInfo, now) {
+			return
+		}
+		// Only remove exact files we created, after checking their identity.
+		// An incomplete marker remains if an unexpected file prevents cleanup.
+		for name, info := range owned {
+			if name == incomplete {
+				continue
+			}
+			p := filepath.Join(abs, name)
+			if now, err := os.Stat(p); err == nil && os.SameFile(info, now) {
+				_ = os.Remove(p)
+			}
+		}
+		entries, err := os.ReadDir(abs)
+		if err == nil && len(entries) == 1 && entries[0].Name() == incomplete {
+			if now, err := os.Stat(filepath.Join(abs, incomplete)); err == nil && os.SameFile(owned[incomplete], now) {
+				_ = os.Remove(filepath.Join(abs, incomplete))
+				_ = os.Remove(abs)
+			}
+		}
+	}()
+	if e = create(incomplete, []byte("AllFiles: izvoz nije dovršen.\n")); e != nil {
+		return "", e
+	}
+	if encryption != nil {
+		b, err := encryption.manifestBytes()
+		if err != nil {
+			return "", err
+		}
+		if e = create(encryptionManifestName, b); e != nil {
+			return "", e
+		}
+	}
+	targetVFS, e := registerEncryptionVFS(abs, encryption)
+	if e != nil {
+		return "", e
+	}
+	defer vfs.Unregister(targetVFS)
+	if e = create("catalog.sqlite", nil); e != nil {
+		return "", e
+	}
+	if _, e = s.conn.ExecContext(context.Background(), `VACUUM main INTO ?`, sqliteURI(filepath.Join(abs, "catalog.sqlite"), targetVFS)); e != nil {
 		return "", e
 	}
 	if !includeContent {
-		copyDB, err := sql.Open("sqlite", filepath.Join(abs, "catalog.sqlite"))
+		copyDB, err := openSQLite(filepath.Join(abs, "catalog.sqlite"), targetVFS)
 		if err != nil {
 			return "", err
 		}
@@ -802,10 +949,54 @@ func (s *Store) Export(destination string, includeContent bool) (string, error) 
 			return "", e
 		}
 		if e == nil {
-			if _, e = s.conn.ExecContext(context.Background(), `VACUUM content INTO ?`, filepath.Join(abs, "content.sqlite")); e != nil {
+			if e = create("content.sqlite", nil); e != nil {
+				return "", e
+			}
+			if _, e = s.conn.ExecContext(context.Background(), `VACUUM content INTO ?`, sqliteURI(filepath.Join(abs, "content.sqlite"), targetVFS)); e != nil {
 				return "", e
 			}
 		}
+	}
+	for _, name := range []string{"catalog.sqlite", "content.sqlite"} {
+		p := filepath.Join(abs, name)
+		if _, err := os.Stat(p); errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		os.Chmod(p, 0600)
+		check, err := openSQLite(p, targetVFS)
+		if err != nil {
+			return "", err
+		}
+		var integrity, owner string
+		err = check.QueryRow(`PRAGMA quick_check`).Scan(&integrity)
+		if err == nil {
+			err = check.QueryRow(`SELECT value FROM meta WHERE key='catalog_id'`).Scan(&owner)
+		}
+		err = errors.Join(err, check.Close())
+		if err != nil {
+			return "", err
+		}
+		if integrity != "ok" || owner != s.catalogID {
+			return "", errors.New("Provera izvezene baze nije uspela. Ponovite izvoz u novi folder.")
+		}
+		// Explicitly flush the finished file rather than relying on VACUUM INTO
+		// or a read-only verification connection to persist the output.
+		output, err := os.OpenFile(p, os.O_RDWR, 0)
+		if err != nil {
+			return "", err
+		}
+		if err = errors.Join(output.Sync(), output.Close()); err != nil {
+			return "", err
+		}
+	}
+	if e = os.Remove(filepath.Join(abs, incomplete)); e != nil {
+		return "", e
+	}
+	// Directory fsync is supported on Unix filesystems; Windows and some
+	// removable filesystems reject it, so file flushes above are authoritative.
+	if directory, err := os.Open(abs); err == nil {
+		_ = directory.Sync()
+		_ = directory.Close()
 	}
 	return abs, nil
 }

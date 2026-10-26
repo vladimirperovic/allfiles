@@ -52,7 +52,7 @@ func run(args []string) error {
 	version := f.Bool("version", false, "Prikaži verziju")
 	mcpURL := f.String("url", "http://127.0.0.1:8787", "Lokalna adresa već pokrenutog AllFiles-a za MCP")
 	f.Usage = func() {
-		fmt.Fprintln(f.Output(), "AllFiles — privatni prenosivi katalog\n\nKomande: serve, scan, import, export, demo, mcp\nPrimer: allfiles --data /putanja/do/montiranog/allfiles --no-browser\nMCP: allfiles mcp --url http://127.0.0.1:8787")
+		fmt.Fprintln(f.Output(), "AllFiles — privatni prenosivi katalog\n\nKomande: serve, scan, import, export, encrypt, demo, mcp\nPrimer: allfiles --data /putanja/do/montiranog/allfiles --no-browser\nŠifrovana kopija: allfiles encrypt --data /putanja/do/kataloga --out /putanja/do/nove-kopije\nMCP: allfiles mcp --url http://127.0.0.1:8787\nLozinke se unose isključivo u interaktivnom terminalu, bez prikazivanja znakova.")
 		f.PrintDefaults()
 	}
 	if e := f.Parse(args); e != nil {
@@ -75,6 +75,23 @@ func run(args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
 		return runMCP(ctx, *mcpURL, os.Stdin, os.Stdout)
+	}
+	switch command {
+	case "scan":
+		if *root == "" {
+			return errors.New("Navedite --root")
+		}
+	case "import":
+		if *input == "" {
+			return errors.New("Navedite --file")
+		}
+	case "export", "encrypt":
+		if *out == "" {
+			return errors.New("Navedite --out")
+		}
+	case "serve", "demo":
+	default:
+		return fmt.Errorf("Nepoznata komanda: %s", command)
 	}
 	if *data == "" {
 		return errors.New("Navedite --data sa postojećim direktorijumom. Baze se ne čuvaju automatski u kućnom folderu.")
@@ -100,7 +117,20 @@ func run(args []string) error {
 		return e
 	}
 	defer lock()
-	s, e := OpenStore(abs)
+	protected, e := RequiresPassword(abs)
+	if e != nil {
+		return e
+	}
+	var password []byte
+	if protected {
+		password, e = readCatalogPassword("Lozinka postojećeg kataloga: ")
+		if e != nil {
+			return e
+		}
+	}
+	s, e := OpenStoreWithPassword(abs, password)
+	zeroCLISecret(password)
+	password = nil
 	if e != nil {
 		return e
 	}
@@ -112,26 +142,29 @@ func run(args []string) error {
 	}
 	switch command {
 	case "scan":
-		if *root == "" {
-			return errors.New("Navedite --root")
-		}
 		e = Scan(ctx, s, ScanOptions{Root: *root, Label: *label, Kind: *kind, Location: *location, IndexContent: *content}, progress)
 		fmt.Fprintln(os.Stderr)
 		return e
 	case "import":
-		if *input == "" {
-			return errors.New("Navedite --file")
-		}
 		e = Import(ctx, s, ImportOptions{Path: *input, Label: *label, Kind: *kind, Location: *location}, progress)
 		fmt.Fprintln(os.Stderr)
 		return e
 	case "export":
-		if *out == "" {
-			return errors.New("Navedite --out")
-		}
 		p, e := s.Export(*out, !*catalogOnly)
 		if e == nil {
 			fmt.Println(p)
+		}
+		return e
+	case "encrypt":
+		newPassword, e := promptNewCatalogPassword()
+		if e != nil {
+			return e
+		}
+		defer zeroCLISecret(newPassword)
+		p, e := s.ExportProtected(*out, !*catalogOnly, newPassword)
+		if e == nil {
+			fmt.Println(p)
+			fmt.Fprintln(os.Stderr, "Šifrovana kopija je napravljena. Izvorni katalog je ostao nepromenjen; za dalji rad koristite novi direktorijum.")
 		}
 		return e
 	case "demo":

@@ -316,9 +316,23 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 		var v struct {
 			Destination    string `json:"destination"`
 			IncludeContent bool   `json:"include_content"`
+			Encrypt        bool   `json:"encrypt"`
+			Password       string `json:"password"`
 		}
 		if e := decode(w, r, &v); e != nil {
 			apiError(w, e)
+			return
+		}
+		password := []byte(v.Password)
+		v.Password = ""
+		defer clear(password)
+		if v.Encrypt {
+			if e := ValidateNewPassword(password); e != nil {
+				apiError(w, e)
+				return
+			}
+		} else if len(password) != 0 {
+			apiError(w, errors.New("Za novu lozinku uključite šifrovanje kopije"))
 			return
 		}
 		a.mu.Lock()
@@ -327,13 +341,19 @@ func (a *app) api(w http.ResponseWriter, r *http.Request) {
 			apiError(w, errors.New("Sačekajte da se indeksiranje završi pre izvoza"))
 			return
 		}
-		p, e := a.store.Export(v.Destination, v.IncludeContent)
+		var p string
+		var e error
+		if v.Encrypt {
+			p, e = a.store.ExportProtected(v.Destination, v.IncludeContent, password)
+		} else {
+			p, e = a.store.Export(v.Destination, v.IncludeContent)
+		}
 		a.mu.Unlock()
 		if e != nil {
 			apiError(w, e)
 			return
 		}
-		jsonReply(w, 200, map[string]string{"path": p})
+		jsonReply(w, 200, map[string]any{"path": p, "encrypted": v.Encrypt || a.store.Encrypted()})
 	case "/api/browse":
 		if !get() {
 			return
