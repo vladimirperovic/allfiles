@@ -1,58 +1,58 @@
-# Go, Rust i SQLite: izmereno poređenje
+# Go, Rust and SQLite: measured comparison
 
-**Zaključak:** nativni SQLite je u ovom testu doneo najveći deo ubrzanja. Na širokim upitima Go sa nativnim SQLite-om bio je oko **2,6–2,7 puta brži** od sadašnjeg Go motora. Rust sa istim nativnim SQLite-om skratio je ta vremena za još oko **1–3%**. To nije dokaz da bi potpuno prepisivanje aplikacije u Rust dalo slično ubrzanje.
+Native SQLite accounted for most of the improvement in this test. For broad queries, Go with native SQLite was about **2.6–2.7 times faster** than the Go engine used by the application at the time. Rust with the same native SQLite reduced those times by a further **1–3%**. This does not establish that rewriting the whole application in Rust would produce the same improvement.
 
-Napravljen je zaseban Rust program za pretragu, ne kompletna Rust verzija AllFiles-a. Eksperimenti ne ulaze u produkcione pakete. Postojeći izgled, skeniranje, uvoz, MCP i šifrovanje ostaju u glavnoj Go aplikaciji.
+A separate Rust query comparator was built for this experiment, not a complete Rust version of AllFiles. The comparators are excluded from production packages. At the time of the experiment, the interface, scanning, import, MCP and encryption remained in the Go application. The subsequent production migration is described below.
 
-## Uslovi merenja
+## Measurement conditions
 
-- Izvršavanje: [GitHub Actions, 26.10.2026.](https://github.com/vladimirperovic/allfiles/actions/runs/40311607185), izvorni commit `d91db50a1e4223fb31ac3de69fd92589a324c4cb`.
-- Linux x86-64, AMD EPYC 9V45, 2 dostupna virtuelna procesora; Go 1.26.10 i Rust 1.99.1.
-- Isti sintetički katalog: **100.050 fajlova**, uključujući 50 lokacija jednog istog dokumenta od oko 1 MiB. Ovo nije velika zbirka različitih dokumenata.
-- Isti SQLite **3.53.4**, identični SQL upiti i parametri. Nativni Go i Rust povezuju potpuno istu statičku SQLite biblioteku; provereni su source ID i sve opcije kompajliranja.
-- Dva uzastopna kruga, obrnut redosled programa u drugom krugu. Svaki upit ima 3 probna i 20 merenih izvršavanja po krugu, sa zagrejanim kešom. Brojevi ispod su **prosek medijana dva kruga**, ne objedinjena medijana svih 40 uzoraka.
-- Svaki uzorak proverava isti ukupan broj i isti redosled ID-jeva. SHA-256 obe baze proverava da programi nisu izmenili ulaz.
+- Run: [GitHub Actions, 26 October 2026](https://github.com/vladimirperovic/allfiles/actions/runs/40311607185), source commit `d91db50a1e4223fb31ac3de69fd92589a324c4cb`.
+- Linux x86-64, AMD EPYC 9V45, 2 available virtual CPUs; Go 1.26.10 and Rust 1.99.1.
+- The same synthetic catalog: **100,050 files**, including 50 locations of one shared document of about 1 MiB. This is not a large collection of distinct documents.
+- The same SQLite **3.53.4**, identical SQL queries and parameters. Native Go and Rust link exactly the same static SQLite library; the source ID and all compile options were checked.
+- Two sequential rounds, with program order reversed in the second. Each query has 3 warmups and 20 measured runs per round with a warm cache. Values below are the **mean of the two round medians**, not a pooled median of all 40 samples.
+- Every sample checks the same total count and exact ordered IDs. SHA-256 checks of both databases verify that the programs did not modify the input.
 
-Merimo SQL brojanje rezultata i stranicu do 50 ID-jeva, uključujući pripremu upita, parametre, čitanje i zatvaranje. **Nisu uključeni** HTTP, puna polja rezultata, prikaz teksta, indeksiranje, izdvajanje PDF/Office sadržaja, šifrovanje i browser. Ovo nisu vremena celog korisničkog zahteva, hladnog pokretanja niti merenja baterije.
+The measured work is SQL result counting and a page of up to 50 IDs, including query preparation, binding, reading and finalization. It **excludes** HTTP, full result fields, snippets, indexing, PDF/Office extraction, encryption and the browser. These are not complete user-request timings, cold-start measurements or battery measurements.
 
-## Rezultati
+## Results
 
-Manje vreme je bolje. „Sadašnji Go” koristi produkcionu verziju `ncruces/go-sqlite3` sa generisanim Go SQLite motorom. „Nativni” znači SQLite kompajliran iz C izvora.
+Lower times are better. "Reference Go" uses the historical production `ncruces/go-sqlite3` version with the generated Go SQLite engine. "Native" means SQLite compiled from C source.
 
-| Upit | Sadašnji Go, ms | Go + nativni SQLite, ms | Rust + nativni SQLite, ms |
+| Query | Reference Go, ms | Go + native SQLite, ms | Rust + native SQLite, ms |
 |---|---:|---:|---:|
-| Redak naziv, 1 pogodak | 2,021 | 0,783 | 0,693 |
-| Retka putanja, 1 pogodak | 1,324 | 0,661 | 0,553 |
-| Prva stranica bez upita | 0,062 | 0,057 | 0,024 |
-| Stranica od 90.000. stavke bez upita | 22,865 | 10,263 | 9,791 |
-| Čest naziv, 99.999 pogodaka | 347,189 | 129,085 | 125,488 |
-| Isti čest naziv, stranica od 90.000. stavke | 367,667 | 138,714 | 136,452 |
-| Jedno slovo, 100.000 pogodaka | 267,762 | 101,508 | 100,197 |
-| Sadržaj, redak pojam u deljenom dokumentu | 0,196 | 0,137 | 0,069 |
-| Sadržaj, čest pojam u deljenom dokumentu | 0,205 | 0,134 | 0,073 |
+| Rare filename, 1 match | 2.021 | 0.783 | 0.693 |
+| Rare path, 1 match | 1.324 | 0.661 | 0.553 |
+| First page, no query | 0.062 | 0.057 | 0.024 |
+| Page at item 90,000, no query | 22.865 | 10.263 | 9.791 |
+| Common filename, 99,999 matches | 347.189 | 129.085 | 125.488 |
+| Same common filename, page at item 90,000 | 367.667 | 138.714 | 136.452 |
+| Single letter, 100,000 matches | 267.762 | 101.508 | 100.197 |
+| Content, rare term in a shared document | 0.196 | 0.137 | 0.069 |
+| Content, common term in a shared document | 0.205 | 0.134 | 0.073 |
 
-| Resurs testnog programa | Sadašnji Go | Go + nativni SQLite | Rust + nativni SQLite |
+| Comparator resource | Reference Go | Go + native SQLite | Rust + native SQLite |
 |---|---:|---:|---:|
-| Izvršni fajl, MiB | 8,72 | 4,08 | 1,70 |
-| Najveći izmereni RAM procesa, MiB | 19,37 | 19,89 | 10,63 |
-| Iste dve baze, MiB | 35,04 | 35,04 | 35,04 |
+| Executable, MiB | 8.72 | 4.08 | 1.70 |
+| Maximum measured process RAM, MiB | 19.37 | 19.89 | 10.63 |
+| Same two databases, MiB | 35.04 | 35.04 | 35.04 |
 
-Veličina programa i RAM odnose se **isključivo na male merne programe**, bez funkcija pune aplikacije i bez browsera. RAM je najveći peak RSS iz dva procesa, izmeren GNU `time` alatom; to nisu Go alokacije. Baze imaju tačno 36.544.512 + 200.704 bajta. Promena jezika nije smanjila bazu. Vrlo mala baza sadržaja ovde potiče i od deljenja istog, sintetičkog teksta.
+Executable size and RAM refer **only to the small comparator programs**, without the full application's features or the browser. RAM is the maximum peak RSS across the two processes, measured with GNU `time`; it is not Go allocation volume. The databases contain exactly 36,544,512 + 200,704 bytes. Changing language did not reduce database size. The small content database also reflects sharing the same synthetic text.
 
-Na najkraćim upitima Rust ima veći relativni dobitak, ali razlika iznosi stotinke ili desetinke milisekunde. Na širokim upitima mala razlika Rust/Go-native ne pokazuje pouzdanu praktičnu prednost jezika: p95 je u nekim slučajevima čak viši kod Rusta. Detaljni p95, rezultati, opcije motora i oba kruga sačuvani su u [sirovom JSON izveštaju](results/2026-10-26-linux.json).
+Rust has a larger relative gain on the shortest queries, but the absolute difference is hundredths or tenths of a millisecond. The small Rust/native-Go difference on broad queries does not demonstrate a reliable practical language advantage: Rust's p95 is higher in some cases. Detailed p95 values, results, engine options and both rounds are preserved in the [raw JSON report](results/2026-10-26-linux.json).
 
-## Stanje nakon migracije
+## State after migration
 
-Verzija 0.3.0 sada koristi kompletan Rust backend sa nativnim SQLite motorom i kompatibilnim Adiantum VFS-om. Tabele iznad ostaju istorijska mjerenja malih SQL programa; nisu veličina niti brzina pune aplikacije. Uputstva i ograničenja migracije su u glavnom README-u.
+Historical version 0.3.0 introduced the complete Rust backend with native SQLite and a compatible Adiantum VFS. The current public release 0.1.5 retains that Rust implementation; historical version labels are unchanged. The tables above remain historical measurements of small SQL comparators, not the full application's size or speed. See the [main guide](../README.md#public-release-015-and-upgrading) for migration guidance and [application benchmark history](application-history.md) for the separate full-application measurements.
 
-## Šta dalje ima smisla
+## Further experiments
 
-Za AllFiles ostaje razuman izbor **SQLite + FTS5**: lokalni prenosivi format bez posebnog servera i indeks za pretragu teksta. [SQLite o lokalnim aplikacijama](https://www.sqlite.org/whentouse.html), [FTS5 dokumentacija](https://www.sqlite.org/fts5.html).
+**SQLite + FTS5** remains a reasonable fit for AllFiles: a portable local format without a separate server, plus a text-search index. See [SQLite's guidance on local applications](https://www.sqlite.org/whentouse.html) and the [FTS5 documentation](https://www.sqlite.org/fts5.html).
 
-Najmanje rizičan sledeći eksperiment je nativni SQLite unutar Go aplikacije, sa istim korisničkim interfejsom. To ipak nije prosta zamena paketa: trenutno šifrovanje koristi poseban Go VFS, pa nativna varijanta zahteva rešenje za šifrovanje, prenosive buildove i ponovljene testove. To je bio zaključak izolovanog testa pre implementacije Rust migracije u 0.3.0. Dalja optimizacija brojanja širokih upita i paginacija kursorom mogu pomoći bez promene jezika.
+Before the Rust migration, this isolated test suggested native SQLite within the Go application as the lowest-risk next experiment. That was not a simple package replacement: encryption used a custom Go VFS, so a native variant needed compatible encryption, portable builds and renewed testing. This was the conclusion before the production Rust migration in 0.3.0. Further broad-query counting improvements and cursor pagination may help without changing language.
 
-[Tantivy](https://github.com/quickwit-oss/tantivy) je biblioteka za punu tekstualnu pretragu pisana u Rustu i kandidat za zaseban veliki indeks sadržaja. Ovde **nije meren**; ne tvrdimo da je brži ili manji za tvoje dokumente. Zahteva drugi format indeksa, usklađivanje sa katalogom i rešavanje šifrovanja. Stvaran WinCatalog izvoz i raznovrstan skup PDF/Office dokumenata potrebni su za sledeće reprezentativno poređenje.
+[Tantivy](https://github.com/quickwit-oss/tantivy) is a Rust full-text search library and a candidate for a separate large content index. It **was not benchmarked here**; no claim is made that it would be faster or smaller for your documents. It would require another index format, catalog synchronization and encryption support. A representative WinCatalog export and varied PDF/Office collection are needed for a more representative comparison.
 
-## Ponovno pokretanje
+## Reproduce
 
-Workflow **Compare Go and Rust search** ručno generiše sintetički katalog i pokreće sve tri varijante. Lokalni postupci su u [Go uputstvu](go-search/README.md) i [Rust uputstvu](rust-search/README.md); zajednički izvršilac je `scripts/compare-search.py`. Za zasebnu proveru optimizacija produkcione aplikacije pogledaj tabelu pre/posle u glavnom [README-u](../README.md#analiza-performansi-i-preostala-poboljšanja).
+The manually dispatched **Compare Go and Rust search** workflow generates a synthetic catalog and runs all three variants. Local procedures are in the [Go guide](go-search/README.md) and [Rust guide](rust-search/README.md); the shared runner is `scripts/compare-search.py`. For separate production-application optimization measurements, see the [main guide](../README.md#historical-measurements-and-remaining-work) and [application benchmark history](application-history.md).

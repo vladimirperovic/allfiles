@@ -1,10 +1,16 @@
-# AllFiles
+<img src="docs/images/logo.svg" width="260" alt="AllFiles logo">
 
-[Srpski](README.md) · English
+# AllFiles
 
 **Public release 0.1.5** · [Download](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) · [Browser demo](https://vladimirperovic.github.io/allfiles/) · [Documentation](docs/README.md) · [Changes](CHANGELOG.md) · [MIT license](LICENSE)
 
-A portable catalog for files on your computers, external drives, Blu-ray discs and LTO tapes. One executable opens a local web interface, and your catalog remains searchable when the original media are disconnected. AllFiles stores file metadata and extracted document text; **it does not back up the original files**.
+A portable catalog for files on your computers, external drives, Blu-ray discs and LTO tapes.
+
+[![AllFiles dashboard with fictional media and files](docs/images/dashboard.png)](https://vladimirperovic.github.io/allfiles/)
+
+*Synthetic demo data: 1 LTO tape, 3 Blu-ray media and 3 disks. [Open the interactive browser demo](https://vladimirperovic.github.io/allfiles/).*
+
+One executable opens a local web interface, and your catalog remains searchable when the original media are disconnected. AllFiles stores file metadata and extracted document text; **it does not back up the original files**.
 
 The application is designed for local use, including Omarchy Linux with its data inside a mounted VeraCrypt container. The project targets Linux, Windows and macOS; consult the release for available packages and verified platforms. There is no subscription, required cloud server or bundled AI model. The executable needs no separate Rust, Go, Node, Python or SQLite installation.
 
@@ -243,7 +249,7 @@ Performance depends on the actual archive, disk, query and content. Short/common
 
 ## Historical measurements and remaining work
 
-Historical version 0.2.0 introduced transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removed redundant per-document writes during metadata import. It also bounded CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope. These historical version labels and samples have not been renumbered for public release 0.1.5.
+Historical version 0.2.0 introduced transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removed redundant per-document writes during metadata import. It also bounded CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the [application benchmark history](https://github.com/vladimirperovic/allfiles/blob/main/experiments/application-history.md) preserves the paired before/after measurements and their scope. These historical version labels and samples have not been renumbered for public release 0.1.5.
 
 Remaining work includes cursor pagination for very deep pages, reads that do not wait for an indexing transaction (one lock currently serializes requests), export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 

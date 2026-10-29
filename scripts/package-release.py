@@ -19,7 +19,7 @@ def package(binary: Path, platform: str, output: Path) -> Path:
         raise ValueError("Expected a regular native executable")
     executable = f"allfiles-{platform}" + (".exe" if platform.startswith("windows-") else "")
     files = {executable: (binary.read_bytes(), 0o755)}
-    for name in ("README.md", "README.en.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.txt", "VERSION"):
+    for name in ("README.md", "README.en.md", "LICENSE", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "THIRD_PARTY_NOTICES.txt", "VERSION", "docs/images/logo.svg", "docs/images/dashboard.png"):
         path = ROOT / name
         if path.is_symlink() or not path.is_file():
             raise ValueError(f"Missing or linked public document: {name}")

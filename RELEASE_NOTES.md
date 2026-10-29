@@ -14,7 +14,7 @@ Public MIT release of AllFiles, a portable local catalog for computers, external
 | macOS Apple Silicon | `allfiles-0.1.5-darwin-arm64.tar.gz` |
 | macOS Intel | `allfiles-0.1.5-darwin-amd64.tar.gz` |
 
-Each archive contains one native executable, both user guides, MIT and dependency licenses, documentation, and checksums. No separate runtime or database installation is needed. These packages are unsigned. macOS and Windows may require approval to run a downloaded application. Linux packages are built on Ubuntu 24.04 and require glibc 2.39 or newer.
+Each archive contains one native executable, the English user guide, MIT and dependency licenses, documentation, and checksums. No separate runtime or database installation is needed. These packages are unsigned. macOS and Windows may require approval to run a downloaded application. Linux packages are built on Ubuntu 24.04 and require glibc 2.39 or newer.
 
 Download `SHA256SUMS.txt` alongside your archive. Verify with `sha256sum --check --ignore-missing SHA256SUMS.txt` on Linux, `shasum -a 256 <archive>` on macOS, or `Get-FileHash <archive> -Algorithm SHA256` in PowerShell. Compare the complete hash to the matching filename in the checksum file before extraction.
 

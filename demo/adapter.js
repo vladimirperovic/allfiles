@@ -4,48 +4,56 @@
 // filesystem API, credentials, uploads, or persistent catalog are used by the demo.
 (() => {
   const version = window.AllFilesDemoConfig.version;
+  // Migrate the original Serbian demo once; later language choices remain saved.
+  const languageDefaultKey = 'allfiles.demo.language-default.en.v1';
+  let useEnglishDefault = true;
+  try {
+    useEnglishDefault = localStorage.getItem(languageDefaultKey) !== '1';
+    if (useEnglishDefault) localStorage.setItem(languageDefaultKey, '1');
+  } catch { /* The demo still defaults to English when storage is unavailable. */ }
+  if (useEnglishDefault) window.AllFilesI18n.setLanguage('en');
   const media = [
-    ['lto-008', 'LTO-008 · Studio master', 'lto', 'Arhiva · polica 2'],
-    ['bluray-01', 'Blu-ray 01 · Projekti 2023', 'bluray', 'Fascikla A · disk 01'],
-    ['bluray-02', 'Blu-ray 02 · Fotografije', 'bluray', 'Fascikla A · disk 02'],
-    ['bluray-03', 'Blu-ray 03 · Dokumenti', 'bluray', 'Fascikla A · disk 03'],
-    ['studio-pc', 'Studio · Radni računar', 'computer', 'Radna soba'],
-    ['ssd-01', 'SSD · Projekti u toku', 'external', 'Radni sto · fioka 1'],
-    ['disk-02', 'Disk · Rezervna kopija', 'external', 'Arhiva · polica 1'],
+    ['lto-008', 'LTO-008 · Studio master', 'lto', 'Archive · shelf 2'],
+    ['bluray-01', 'Blu-ray 01 · Projects 2023', 'bluray', 'Binder A · disc 01'],
+    ['bluray-02', 'Blu-ray 02 · Photography', 'bluray', 'Binder A · disc 02'],
+    ['bluray-03', 'Blu-ray 03 · Documents', 'bluray', 'Binder A · disc 03'],
+    ['studio-pc', 'Studio · Workstation', 'computer', 'Home office'],
+    ['ssd-01', 'SSD · Active projects', 'external', 'Desk · drawer 1'],
+    ['disk-02', 'Disk · Backup archive', 'external', 'Archive · shelf 1'],
   ];
   const templates = [
-    ['Budžet projekta.xlsx', 'Dokumenti', 'Budžet, faze radova i pregled troškova. Ukupna vrednost izmišljenog projekta je 24.500 EUR.'],
-    ['Ugovor o projektovanju.pdf', 'Dokumenti', 'Dogovor o projektovanju enterijera. Prirodni hrast, kamen i toplo belo osvetljenje.'],
-    ['Ponuda za nameštaj.docx', 'Dokumenti', 'Ponuda za izradu kuhinje od hrasta. Isporuka: šest nedelja.'],
-    ['Prezentacija koncepta.pptx', 'Prezentacije', 'Koncept mirnog prostora: drvo, svetlost, teksture i funkcionalna kuhinja.'],
-    ['Zapisnik sastanka.docx', 'Dokumenti', 'Na sastanku su usvojeni raspored prostorija, plan rasvete i rokovi.'],
-    ['Specifikacija materijala.pdf', 'Dokumenti', 'Prirodni kamen, mat metal, hrast i tekstil. Uzorci za završnu obradu.'],
-    ['Predmer radova.xlsx', 'Dokumenti', 'Pregled stolarskih, električarskih i molerskih radova po prostorijama.'],
-    ['Plan rasvete.pdf', 'Crteži', 'Toplo belo osvetljenje 2700 K. Posebna rasveta radne ploče i police za knjige.'],
-    ['Beleške sa lokacije.txt', 'Dokumenti', 'Izmišljene beleške: prozori gledaju na dvorište. Čaša, ćilim, šuma, žuta boja i đurđevak. 😀'],
-    ['Uputstvo za arhivu.md', 'Dokumenti', 'Ovo su isključivo izmišljeni podaci za AllFiles demo. Pretraga radi i kada medij nije priključen.'],
-    ['Osnova prizemlja.dwg', 'Crteži', ''],
-    ['Detalji stolarije.dwg', 'Crteži', ''],
-    ['Dnevna soba — render.jpg', 'Vizualizacije', ''],
-    ['Kuhinja — varijanta B.png', 'Vizualizacije', ''],
-    ['Fotografije lokacije.jpg', 'Fotografije', ''],
-    ['Terasa u sumrak.png', 'Vizualizacije', ''],
-    ['Obilazak prostora.mp4', 'Video', ''],
-    ['Finalna prezentacija.mp4', 'Video', ''],
-    ['Teksture — hrast.zip', 'Arhiva', ''],
-    ['Izvorni materijali.zip', 'Arhiva', ''],
+    ['Project budget.xlsx', 'Documents', 'Budget, work stages and cost breakdown. The total budget for this fictional project is EUR 24,500.'],
+    ['Design agreement.pdf', 'Documents', 'Interior design agreement. Natural oak, stone and warm white lighting.'],
+    ['Furniture proposal.docx', 'Documents', 'Proposal for a custom oak kitchen. Delivery: six weeks.'],
+    ['Concept presentation.pptx', 'Presentations', 'A calm interior: wood, light, textures and a functional kitchen.'],
+    ['Meeting notes.docx', 'Documents', 'The team approved the room layout, lighting plan and delivery schedule.'],
+    ['Material specification.pdf', 'Documents', 'Natural stone, brushed metal, oak and textiles. Samples for the final finishes.'],
+    ['Bill of quantities.xlsx', 'Documents', 'Carpentry, electrical and painting work listed by room.'],
+    ['Lighting plan.pdf', 'Drawings', 'Warm white lighting at 2700 K. Separate lighting for the worktop and bookshelves.'],
+    ['Site notes.txt', 'Documents', 'Fictional site notes: the windows face the courtyard. Natural light, warm colors and a quiet garden. 😀'],
+    ['Archive guide.md', 'Documents', 'These are invented records for the AllFiles demo. The catalog remains searchable when media are disconnected.'],
+    ['Ground floor plan.dwg', 'Drawings', ''],
+    ['Joinery details.dwg', 'Drawings', ''],
+    ['Living room — render.jpg', 'Visualizations', ''],
+    ['Kitchen — option B.png', 'Visualizations', ''],
+    ['Location photographs.jpg', 'Photography', ''],
+    ['Terrace at dusk.png', 'Visualizations', ''],
+    ['Interior walkthrough.mp4', 'Video', ''],
+    ['Final presentation.mp4', 'Video', ''],
+    ['Textures — oak.zip', 'Archive', ''],
+    ['Source materials.zip', 'Archive', ''],
   ];
-  const projects = ['Villa Aurora', 'Stan Dorćol', 'Studio North'];
+  const projects = ['Villa Aurora', 'Dorćol Apartment', 'Studio North'];
   const sources = media.map(([id, label, kind, location]) => ({ id, label, kind, location, root: `demo://${id}`, last_scan: '2026-10-28T16:30:00Z', status: 'offline', file_count: 0, total_size: 0 }));
   const files = [], texts = new Map();
   const fold = value => String(value).toLowerCase().replace(/đ/g, 'dj').normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   sources.forEach((source, si) => projects.forEach((project, pi) => templates.forEach(([name, folder, text], ni) => {
     const id = files.length + 1, extension = name.split('.').pop();
     const size = extension === 'mp4' ? 1500000000 + si * 78000000 + pi * 12000000 + ni * 800000 : extension === 'zip' ? 320000000 + si * 27000000 : 128000 + (si + 1) * (pi + 1) * (ni + 3) * 178492;
-    const relative_path = `Projekti/${project}/${folder}/${name}`;
+    const relative_path = `Projects/${project}/${folder}/${name}`;
     const file = { id, name, relative_path, path: `${source.root}/${relative_path}`, source_id: source.id, source_label: source.label, kind: source.kind, location: source.location, size, modified: 1793185200 - (si * 72 + pi * 9 + ni) * 3600, extension, text_status: text ? 'indexed' : 'unsupported', text_detail: '', snippet: '' };
     files.push(file); source.file_count++; source.total_size += size;
-    if (text) texts.set(id, `DEMO — izmišljeni dokument / fictional document\n\n${name}\nProjekat: ${project}\nMedij: ${source.label}\n\n${text}\n\nOvaj tekst nije preuzet iz stvarnih dokumenata. AllFiles čuva nazive, putanje i indeksirani tekst za pretragu kroz celu biblioteku.`);
+    if (text) texts.set(id, `DEMO — fictional document\n\n${name}\nProject: ${project}\nMedia: ${source.label}\n\n${text}\n\nThis text does not come from real documents. AllFiles keeps names, paths and indexed text searchable across the entire library.`);
   })));
   const json = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json; charset=utf-8' } });
   const english = () => window.AllFilesI18n.language === 'en';

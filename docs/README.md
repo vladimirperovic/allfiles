@@ -4,8 +4,8 @@ AllFiles 0.1.5 is the public release of the current Rust application. It catalog
 
 | Document | Purpose |
 |---|---|
-| [Srpsko uputstvo](../README.md) | Instalacija, skeniranje, pretraga, uvoz, izvoz, šifrovanje i MCP |
-| [English user guide](../README.en.md) | Installation, everyday use, formats and limits |
+| [User guide](../README.md) | Installation, scanning, search, import, export, encryption and MCP |
+| [English guide compatibility link](../README.en.md) | The same English guide at the existing README.en.md path |
 | [Architecture](ARCHITECTURE.md) | Rust modules, storage, concurrency and trust boundaries |
 | [Public release](PUBLIC_RELEASE.md) | Version meaning, packages, demo and release checks |
 | [Validation](VALIDATION.md) | Recorded checks and platform limitations |

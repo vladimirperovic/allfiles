@@ -1,6 +1,6 @@
 # Validation of 0.1.5
 
-Recorded on 2026-10-29. Tests use generated files and catalogs; no personal catalog is required or published. Results below describe the final local Windows x64 Rust build. Native GitHub Actions results for Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64 are available in [Build and test](https://github.com/vladimirperovic/allfiles/actions/workflows/build.yml). Release publication requires all five native jobs to succeed.
+Recorded on 2026-10-29. Tests use generated files and catalogs; no personal catalog is required or published. Results below describe the final local Windows x64 Rust build. The [native validation run](https://github.com/vladimirperovic/allfiles/actions/runs/40851121500) passed on all five targets: Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64. Each ran formatting, Clippy, Rust tests, a release build, HTTP/MCP smoke checks, synthetic regressions and archive verification. Release publication additionally requires all five native jobs to succeed for the release tag; follow [Build and test](https://github.com/vladimirperovic/allfiles/actions/workflows/build.yml) for that run.
 
 ## Local results
 
@@ -20,7 +20,7 @@ All 26 steps of the final validation run passed, including the release build, ve
 | Storage lifecycle and search/snippet checks | 67 / 67 |
 | Browser end-to-end behavior | 13 / 13 |
 | Browser startup/reconnection and missing-content recovery | 11 / 11 |
-| Static dashboard demo | 17 / 17 |
+| Static dashboard demo, including English migration and language persistence | 19 / 19 |
 
 Additional checks passed: HTTP/MCP smoke test, startup/statistics query inspection, interleaved import correctness, `go test ./...`, `go vet ./...`, `go test -race ./...`, tests and vet for the Go search experiment, and reading a Rust-encrypted export with the Go reference implementation. The demo had no JavaScript exceptions, failed HTTP responses, backend API calls or external requests. Desktop and narrow mobile screenshots were inspected.
 

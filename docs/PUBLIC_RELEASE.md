@@ -32,7 +32,7 @@ This table describes target names, not a claim that every artifact is available 
 
 Native CI Linux packages target Ubuntu 24.04 and glibc 2.39 or newer. This is the distribution target, not a portability claim for older Linux systems. Build from source for other environments and verify runtime behavior there.
 
-Release archives include the appropriate executable, both user guides, license, changelog, contributor/security guidance, documentation, third-party notices, `VERSION` and an internal `SHA256SUMS` file. The release also provides `SHA256SUMS.txt` for the five complete archives. They must not include data directories or a populated personal catalog. Users should verify the published archive hash before extraction and follow the [user guide](../README.en.md).
+Release archives include the appropriate executable, English user documentation (README.md and its README.en.md compatibility copy), license, changelog, contributor/security guidance, documentation, third-party notices, `VERSION` and an internal `SHA256SUMS` file. The release also provides `SHA256SUMS.txt` for the five complete archives. They must not include data directories or a populated personal catalog. Users should verify the published archive hash before extraction and follow the [user guide](../README.md).
 
 ## Package a tested build
 

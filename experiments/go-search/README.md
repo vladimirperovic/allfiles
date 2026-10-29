@@ -4,7 +4,7 @@ This experimental command measures SQL **count plus an ordered page of file IDs*
 
 Two builds share the same Go executor:
 
-- `go-pure`: the production `ncruces/go-sqlite3` version and Go SQLite engine, with FTS5 registered as in AllFiles; `CGO_ENABLED=0`.
+- `go-pure`: the historical Go production `ncruces/go-sqlite3` version and Go SQLite engine, with FTS5 registered as in that implementation; `CGO_ENABLED=0`.
 - `go-native`: `mattn/go-sqlite3`, linked to the **same static SQLite 3.53.4 library** as the Rust comparator; CGO required, statement cache explicitly disabled. Both native executors use SQLite `NO_MUTEX` on one connection, with operations serialized by the executor.
 
 The experiment has a separate `go.mod` and `go.sum`; native comparison dependencies do not enter the production application. Its tests are separate from the root module's `go test ./...`.

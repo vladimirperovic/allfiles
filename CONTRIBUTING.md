@@ -14,11 +14,12 @@ Do not attach personal catalogs, private documents, passwords, tokens, `encrypti
 
 ## Build and run
 
-Use Rust **1.99.1** and the committed `Cargo.lock`. Bundled SQLite requires a C compiler: `base-devel` on Arch/Omarchy, Xcode Command Line Tools on macOS, or Visual Studio C++ Build Tools / llvm-mingw on Windows. Python 3 is used by integration scripts; Node.js is used by frontend regression scripts. Finished application packages do not require these development tools.
+Use Rust **1.99.1** and the committed `Cargo.lock`. Bundled SQLite requires a C compiler: `base-devel` on Arch/Omarchy, Xcode Command Line Tools on macOS, or Visual Studio C++ Build Tools / llvm-mingw on Windows. Use Python 3.11 or newer with SQLite FTS5 support for validation scripts, and Node.js for frontend regressions. Finished application packages do not require these development tools.
 
 From the repository root:
 
 ```sh
+python scripts/check-version.py
 cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
@@ -58,7 +59,7 @@ The Rust test `reads_and_updates_go_encryption_format` is ignored by default. It
 
 ## Submit a change
 
-Keep changes focused and explain the concrete behavior before and after. Add a regression test for a fixed correctness or lifecycle bug, using synthetic data. Include the checks actually run and any platform or fixture that was unavailable. Update both user guides for user-visible changes and preserve license notices. Avoid generated executables, personal exports, credentials and machine-specific paths in commits.
+Keep changes focused and explain the concrete behavior before and after. Add a regression test for a fixed correctness or lifecycle bug, using synthetic data. Include the checks actually run and any platform or fixture that was unavailable. Keep public documentation in English and update README.md together with its README.en.md compatibility copy for user-visible changes. Preserve license notices. Avoid generated executables, personal exports, credentials and machine-specific paths in commits.
 
 Use [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to locate components and [docs/PUBLIC_RELEASE.md](docs/PUBLIC_RELEASE.md) for release preparation. Existing historical version tags and performance evidence must not be rewritten to match a new release number.
 

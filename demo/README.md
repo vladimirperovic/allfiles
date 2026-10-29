@@ -1,6 +1,6 @@
 # GitHub Pages dashboard demo
 
-The demo opens the actual AllFiles dashboard with 420 invented files on seven media: one LTO tape, three Blu-ray discs, one computer and two external disks. Search, content previews, filters, sorting, pagination and Serbian/English switching run in the browser.
+The demo opens the actual AllFiles dashboard in English with 420 invented files on seven media: one LTO tape, three Blu-ray discs, one computer and two external disks. Search, content previews, filters, sorting, pagination and English/Serbian switching run in the browser. A one-time migration sets existing demo sessions to English; later language choices remain saved.
 
 Build with Python 3.11 or newer:
 
@@ -18,4 +18,4 @@ The browser regression mounts the generated site under `/allfiles/`, checks the 
 node scripts/audit_demo.mjs dist/pages audit/demo
 ```
 
-The test uses `playwright-core` installed locally or in `.tmp/ui/node_modules`, and Microsoft Edge on Windows by default. Set `BROWSER_PATH` to use another Chromium executable. The Pages deployment workflow only needs Python and the generated static files.
+The test uses `playwright-core` installed locally or in `.tmp/ui/node_modules`, and Microsoft Edge on Windows by default. Set `BROWSER_PATH` to use another Chromium executable. The Pages workflow builds with Python, runs these checks with Node.js and pinned Playwright Chromium, and deploys only after they pass.

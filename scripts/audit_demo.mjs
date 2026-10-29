@@ -44,7 +44,8 @@ try {
   await page.goto(base, { waitUntil: 'networkidle' });
   await page.waitForFunction(() => document.querySelectorAll('#file-rows tr').length === 60);
   const data = await page.evaluate(async () => ({ status: await (await fetch('/api/status')).json(), sources: (await (await fetch('/api/sources')).json()).sources }));
-  record('demo opens directly to a populated dashboard', await page.locator('#view-search').isVisible() && data.status.files === 420 && data.status.documents === 210 && await page.locator('#result-count').innerText() === '420' && await page.locator('#demo-heading').isVisible(), { files: data.status.files, documents: data.status.documents, rows: await page.locator('#file-rows tr').count() });
+  record('demo opens directly to a populated English dashboard', await page.locator('#view-search').isVisible() && data.status.files === 420 && data.status.documents === 210 && await page.locator('#result-count').innerText() === '420' && await page.locator('#demo-heading').isVisible() && await page.locator('html').getAttribute('lang') === 'en' && await page.locator('#connection-status').innerText() === 'Browser demo', { files: data.status.files, documents: data.status.documents, rows: await page.locator('#file-rows tr').count(), language: await page.locator('html').getAttribute('lang') });
+  await page.screenshot({ path: join(output, 'demo-readme.png'), fullPage: false });
   const kinds = data.sources.reduce((counts, source) => ({ ...counts, [source.kind]: (counts[source.kind] || 0) + 1 }), {});
   await page.locator('[data-view="sources"]').click();
   record('requested media are all reachable as real dashboard cards', kinds.lto === 1 && kinds.bluray === 3 && kinds.computer === 1 && kinds.external === 2 && await page.locator('.source-card').count() === 7 && await page.locator('#source-filter option').count() === 8, { kinds, labels: data.sources.map(source => source.label) });
@@ -69,10 +70,10 @@ try {
   await page.waitForFunction(() => document.querySelector('#result-count').textContent === '21');
   await page.locator('#file-rows tr').first().click();
   await page.locator('.text-preview').getByText(/2700 K/).waitFor();
-  record('content search opens a matching fictional document preview', (await page.locator('.text-preview').innerText()).includes('izmišljeni dokument') && await page.locator('#result-count').innerText() === '21', { preview: await page.locator('.text-preview').innerText() });
+  record('content search opens a matching fictional document preview', (await page.locator('.text-preview').innerText()).includes('fictional document') && await page.locator('#result-count').innerText() === '21', { preview: await page.locator('.text-preview').innerText() });
   await page.locator('.details-actions button').first().click();
   await page.locator('#demo-dialog').waitFor({ state: 'visible' });
-  record('opening a fictional original explains the demo without accessing a file', (await page.locator('#demo-dialog-description').innerText()).includes('izmišljene fajlove'), await page.locator('#demo-dialog-description').innerText());
+  record('opening a fictional original explains the demo without accessing a file', (await page.locator('#demo-dialog-description').innerText()).includes('fictional files'), await page.locator('#demo-dialog-description').innerText());
   await page.locator('#demo-dialog-continue').click();
   await page.locator('#ext-filter').selectOption('docx');
   await page.waitForFunction(() => document.querySelector('#result-count').textContent === '0');
@@ -108,9 +109,16 @@ try {
   record('adapter rejects mutations and network fallback while respecting cancellation', blocked.mutations.every(request => request.status === 403) && blocked.external === 404 && blocked.aborted && blocked.files === 420, blocked);
   await page.locator('[data-view="search"]').click();
   await page.locator('#language-toggle').click();
-  record('language switching translates both dashboard and demo guidance', await page.locator('#connection-status').innerText() === 'Browser demo' && (await page.locator('#demo-description').innerText()).includes('1 LTO tape, 3 Blu-ray discs and 3 drives') && (await page.locator('#version-label').innerText()).includes('0.1.5'), { banner: await page.locator('#demo-description').innerText(), version: await page.locator('#version-label').innerText() });
+  const serbianWorks = await page.locator('html').getAttribute('lang') === 'sr-Latn' && await page.locator('#connection-status').innerText() === 'Demo u pregledaču' && (await page.locator('#demo-description').innerText()).includes('1 LTO kasetu, 3 Blu-ray medija i 3 diska');
+  await page.reload({ waitUntil: 'networkidle' });
+  record('a later Serbian language choice survives reload', serbianWorks && await page.locator('html').getAttribute('lang') === 'sr-Latn', { language: await page.locator('html').getAttribute('lang') });
+  // Simulate a returning visitor from the original Serbian-default demo.
+  await page.evaluate(() => { localStorage.setItem('allfiles.language', 'sr'); localStorage.removeItem('allfiles.demo.language-default.en.v1'); });
+  await page.reload({ waitUntil: 'networkidle' });
+  const migration = await page.evaluate(() => ({ language: document.documentElement.lang, defaultApplied: localStorage.getItem('allfiles.demo.language-default.en.v1'), savedLanguage: localStorage.getItem('allfiles.language') }));
+  record('previous Serbian demo sessions migrate to English once', migration.language === 'en' && migration.defaultApplied === '1' && migration.savedLanguage === 'en', migration);
+  record('language switching translates both dashboard and demo guidance', serbianWorks && await page.locator('#connection-status').innerText() === 'Browser demo' && (await page.locator('#demo-description').innerText()).includes('1 LTO tape, 3 Blu-ray discs and 3 drives') && (await page.locator('#version-label').innerText()).includes('0.1.5'), { banner: await page.locator('#demo-description').innerText(), version: await page.locator('#version-label').innerText() });
   await page.screenshot({ path: join(output, 'demo-dashboard-en.png'), fullPage: true });
-  await page.locator('#language-toggle').click();
   await page.screenshot({ path: join(output, 'demo-dashboard.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   const dimensions = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
