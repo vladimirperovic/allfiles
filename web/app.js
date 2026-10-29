@@ -7,7 +7,9 @@
   const t = i18n.t;
   const kindNames = { computer: 'Računar', external: 'Eksterni disk', bluray: 'Blu-ray / DVD', lto: 'LTO kaseta', folder: 'Folder' };
   const kindIcons = { computer: 'laptop', external: 'drive', bluray: 'disc', lto: 'drive', folder: 'folder' };
-  const state = { token: null, status: null, sources: [], results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
+  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
+  let sourceViews = new Map(), sourcesRenderKey = null;
+  let contentWarning = null;
   let exportRequestPayload = null;
   let exportInProgress = false;
 
@@ -89,7 +91,11 @@
     const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal, credentials: 'same-origin', cache: 'no-store' });
     let result;
     try { result = await response.json(); } catch { throw new Error(t('Servis nije vratio čitljiv odgovor ({status}).', { status: response.status })); }
-    if (!response.ok || result.error) throw new Error(result.error || t('Zahtev nije uspeo ({status}).', { status: response.status }));
+    if (!response.ok || result.error) {
+      const error = new Error(result.error || t('Zahtev nije uspeo ({status}).', { status: response.status }));
+      error.status = response.status;
+      throw error;
+    }
     return result;
   }
   function connection(connected, error) {
@@ -115,14 +121,34 @@
   }
 
   function renderStatus(status) {
+    if (state.closed) return;
+    const instanceChanged = Boolean(status.instance_id && state.instanceId && status.instance_id !== state.instanceId);
+    if (!instanceChanged && Number.isFinite(status.job_revision) && status.job_revision < state.jobRevision) return;
+    const firstStatus = !state.status;
+    const reconnected = !state.connected;
     const oldJob = state.status?.job;
-    const oldCount = state.status?.files;
+    const oldStatus = state.status;
+    if (instanceChanged) { state.token = null; state.jobRevision = -1; }
+    if (status.instance_id) state.instanceId = status.instance_id;
+    if (Number.isFinite(status.job_revision)) state.jobRevision = status.job_revision;
     state.status = status;
     state.busy = jobRunning(status.job);
     $('#stat-files').textContent = i18n.formats.number.format(status.files || 0);
     $('#stat-size').textContent = fmtBytes(status.bytes);
     $('#stat-sources').textContent = i18n.formats.number.format(status.sources || 0);
     $('#stat-documents').textContent = i18n.formats.number.format(status.documents || 0);
+    if (status.content_error && !contentWarning) {
+      contentWarning = element('div', 'connection-error');
+      contentWarning.id = 'content-warning';
+      contentWarning.setAttribute('role', 'status');
+      $('#connection-error').after(contentWarning);
+    }
+    if (contentWarning) {
+      contentWarning.hidden = !status.content_error;
+      contentWarning.title = status.content_error || '';
+      contentWarning.textContent = status.content_error ? t('Tekst dokumenata nije u potpunosti dostupan. Pretraga naziva i putanja radi. Vratite odgovarajuću bazu sadržaja ili ponovite indeksiranje medija.') : '';
+      if (status.content_error && status.stored_documents > 0) contentWarning.textContent += ' ' + t('Dostupno je {available} od {expected} indeksiranih dokumenata.', { available: i18n.formats.number.format(status.documents || 0), expected: i18n.formats.number.format(status.stored_documents) });
+    }
     const databaseBreakdown = t('Katalog {catalog} · Sadržaj {content}', { catalog: fmtBytes(status.catalog_bytes), content: fmtBytes(status.content_bytes) });
     $('#database-size').textContent = databaseBreakdown;
     const databaseBadge = $('#database-size-badge');
@@ -144,17 +170,38 @@
     updateExportEncryption();
     $('#nav-job-dot').hidden = !state.busy;
     renderJob(status.job);
-    const finished = oldJob && jobRunning(oldJob) && !jobRunning(status.job);
+    const finished = (state.ready || oldStatus) && status.job && !jobRunning(status.job) && (oldJob?.id !== status.job.id || jobRunning(oldJob));
     if (finished) {
       if (status.job?.status === 'completed' || status.job?.status === 'done') toast(t('Katalog je osvežen. Novi fajlovi su spremni za pretragu.'));
       if (status.job?.status === 'failed' || status.job?.status === 'error') toast(status.job.error || t('Indeksiranje nije završeno.'), true);
       if (status.job?.status === 'cancelled' || status.job?.status === 'canceled') toast(t('Indeksiranje je zaustavljeno. Sačuvani podaci ostaju u katalogu.'));
-      loadSources();
-      runSearch();
-    } else if (state.ready && oldCount !== undefined && oldCount !== status.files && !state.busy) {
-      loadSources();
-      runSearch();
     }
+    const changedCounts = oldStatus && ['files', 'sources', 'documents', 'bytes'].some(key => oldStatus[key] !== status[key]);
+    if (finished || (state.ready && (firstStatus || instanceChanged || reconnected || (changedCounts && !state.busy)))) {
+      refreshCatalog();
+    } else if (state.ready) {
+      // Retry transient failures at the status polling interval, without
+      // restarting a pending request or repeating invalid user queries.
+      if (state.sourcesRetry && !state.sourcesPending) loadSources();
+      if (state.searchRetry && !state.searchPending) runSearch();
+    }
+  }
+  function refreshCatalog() {
+    loadSources();
+    runSearch();
+    if (state.selected !== null) {
+      const selected = state.detailsState?.file || state.results.find(file => file.id === state.selected);
+      if (selected) showDetails(selected); else closeDetails();
+    }
+  }
+  function acceptJob(result, requestInstance = state.instanceId) {
+    if (state.closed || !result.job) return;
+    if (requestInstance && result.instance_id === requestInstance && state.instanceId !== requestInstance) return;
+    // A status request started before this acknowledgement must not replace
+    // the accepted job, even when its response arrives afterwards.
+    state.statusEpoch++;
+    if (state.status?.job?.id === result.job.id && !jobRunning(state.status.job)) return;
+    renderStatus({ ...(state.status || {}), job: result.job, instance_id: result.instance_id || state.instanceId, job_revision: result.job_revision });
   }
   function renderJob(job) {
     const running = jobRunning(job);
@@ -179,20 +226,44 @@
     if (state.closed || state.statusRefreshing) return;
     clearTimeout(state.pollTimer);
     state.statusRefreshing = true;
-    try { renderStatus(await api('/api/status')); connection(true); } catch (error) { connection(false, error.message); }
+    const epoch = state.statusEpoch;
+    try {
+      const status = await api('/api/status');
+      if (state.closed || epoch !== state.statusEpoch) return;
+      renderStatus(status); connection(true);
+    } catch (error) { if (!state.closed && epoch === state.statusEpoch) connection(false, error.message); }
     finally {
       state.statusRefreshing = false;
-      if (!state.closed && (!document.hidden || state.busy)) state.pollTimer = setTimeout(refreshStatus, state.busy ? 1200 : 5000);
+      if (!state.closed && (!document.hidden || state.busy)) state.pollTimer = setTimeout(refreshStatus, epoch !== state.statusEpoch ? 0 : state.busy ? 1200 : 5000);
     }
   }
   async function loadSources() {
+    if (state.closed) return;
+    const requestId = ++state.sourcesRequest;
+    state.sourcesController?.abort();
+    const controller = new AbortController();
+    state.sourcesController = controller;
+    state.sourcesPending = true;
     try {
-      const result = await api('/api/sources');
+      const result = await api('/api/sources', { signal: controller.signal });
+      if (state.closed || requestId !== state.sourcesRequest) return;
       state.sources = Array.isArray(result.sources) ? result.sources : [];
+      state.sourcesRetry = false;
       renderSources();
-    } catch (error) { if (state.ready) toast('Mediji nisu učitani: {error}', true, false, { error: t(error.message) }); }
+    } catch (error) {
+      if (state.closed || requestId !== state.sourcesRequest || error.name === 'AbortError') return;
+      state.sourcesRetry = true;
+      if (state.ready) toast('Mediji nisu učitani: {error}', true, false, { error: t(error.message) });
+    } finally {
+      if (requestId === state.sourcesRequest) { state.sourcesPending = false; state.sourcesController = null; }
+    }
   }
   function renderSources() {
+    const language = i18n.language || '';
+    const items = state.sources.map(source => ({ source, key: JSON.stringify([language, source.id, source.root, source.label, source.kind, source.location, source.last_scan, source.file_count, source.total_size]) }));
+    const renderKey = language + '\n' + items.map(item => item.key).join('\n');
+    if (renderKey === sourcesRenderKey) { updateSourceSelection(); return; }
+    const nextViews = new Map();
     $('#nav-source-count').textContent = i18n.formats.number.format(state.sources.length);
     $('#source-card-count').textContent = i18n.formats.number.format(state.sources.length);
     const sourceFilter = $('#source-filter');
@@ -202,7 +273,13 @@
     const sidebar = $('#sidebar-sources'); sidebar.replaceChildren();
     const cards = $('#source-cards'); cards.replaceChildren();
     if (!state.sources.length) sidebar.append(element('p', 'sidebar-empty', t('Vaši računari, diskovi i arhive na jednom mestu.')));
-    state.sources.forEach(source => {
+    items.forEach(({ source, key }) => {
+      const previous = sourceViews.get(source.id);
+      if (previous?.key === key) {
+        sourceFilter.append(previous.option); sidebar.append(previous.sideButton); cards.append(previous.card);
+        nextViews.set(source.id, previous);
+        return;
+      }
       const option = element('option', '', source.label); option.value = String(source.id); sourceFilter.append(option);
       const sideButton = element('button', 'sidebar-source');
       sideButton.title = source.label;
@@ -232,10 +309,14 @@
         else sourceDialog(source);
       }); buttons.append(scanButton); card.append(buttons);
       cards.append(card);
+      nextViews.set(source.id, { key, option, sideButton, card });
     });
+    sourceViews = nextViews;
+    sourcesRenderKey = renderKey;
     sourceFilter.value = selectedFilter;
     const add = element('button', 'add-source-card'); add.append(icon('plus'), element('strong', '', t('Dodajte novi medij')), element('span', '', t('Proširite svoju biblioteku'))); add.addEventListener('click', () => sourceDialog()); cards.append(add);
     updateSourceSelection();
+    if (state.ready && sourceFilter.value !== selectedFilter) searchChanged(true);
   }
   function updateSourceSelection() {
     $$('.sidebar-source').forEach(button => button.classList.toggle('selected', button.dataset.sourceId === $('#source-filter').value));
@@ -255,6 +336,9 @@
     updateSourceSelection();
     clearTimeout(state.searchTimer);
     if (state.searchController) state.searchController.abort();
+    state.searchController = null;
+    state.searchPending = true;
+    updatePaginationControls();
     if (immediate) runSearch(); else state.searchTimer = setTimeout(runSearch, 220);
   }
   async function runSearch() {
@@ -263,11 +347,13 @@
     if (state.searchController) state.searchController.abort();
     const controller = new AbortController();
     state.searchController = controller;
+    state.searchPending = true;
+    updatePaginationControls();
     const query = $('#search-input').value.trim();
     const params = new URLSearchParams({ q: query, mode: state.mode, source: $('#source-filter').value, ext: $('#ext-filter').value, sort: $('#sort-select').value, offset: String(state.offset), limit: String(state.limit) });
     $('#results-panel').setAttribute('aria-busy', 'true');
     const delayedLoading = setTimeout(() => {
-      if (state.searchController !== controller) return;
+      if (state.closed || state.searchController !== controller) return;
       $('#loading-state').hidden = false;
       $('#table-scroll').hidden = true;
       $('#empty-state').hidden = true;
@@ -276,16 +362,26 @@
     }, 250);
     try {
       const result = await api(`/api/search?${params}`, { signal: controller.signal });
-      if (state.searchController !== controller) return;
+      if (state.closed || state.searchController !== controller) return;
       state.results = Array.isArray(result.results) ? result.results : [];
       state.total = Number(result.total) || 0;
       state.searchError = '';
+      state.searchRetry = false;
       state.elapsed = result.elapsed_ms;
+      // A rescan can remove the current last page while this view stays open.
+      // Fetch the last remaining page instead of hiding the only way back.
+      const lastOffset = Math.max(0, Math.ceil(state.total / state.limit) - 1) * state.limit;
+      if (state.offset > lastOffset) {
+        state.offset = lastOffset;
+        closeDetails();
+        if (state.total > 0) return runSearch();
+      }
       renderResults();
     } catch (error) {
       if (error.name === 'AbortError') return;
-      if (state.searchController !== controller) return;
+      if (state.closed || state.searchController !== controller) return;
       state.searchError = error.message;
+      state.searchRetry = !error.status || error.status >= 500;
       $('#file-rows').replaceChildren();
       $('#table-scroll').hidden = true;
       $('#empty-state').hidden = true;
@@ -298,6 +394,9 @@
     } finally {
       clearTimeout(delayedLoading);
       if (state.searchController === controller) {
+        state.searchPending = false;
+        state.searchController = null;
+        updatePaginationControls();
         $('#loading-state').hidden = true;
         $('#results-panel').setAttribute('aria-busy', 'false');
       }
@@ -347,8 +446,21 @@
     const end = Math.min(state.offset + state.results.length, state.total);
     $('#pagination-summary').textContent = t('{start}–{end} od {total} fajlova', { start: i18n.formats.number.format(state.offset + 1), end: i18n.formats.number.format(end), total: i18n.formats.number.format(state.total) });
     $('#page-number').textContent = i18n.formats.number.format(Math.floor(state.offset / state.limit) + 1);
-    $('#previous-page').disabled = state.offset === 0;
-    $('#next-page').disabled = end >= state.total;
+    updatePaginationControls();
+  }
+  function updatePaginationControls() {
+    const unavailable = state.searchPending || Boolean(state.searchError);
+    $('#previous-page').disabled = unavailable || state.offset === 0;
+    $('#next-page').disabled = unavailable || state.offset + state.limit >= state.total;
+  }
+  function changePage(direction) {
+    if (state.searchPending || state.searchError) return;
+    const lastOffset = Math.max(0, Math.ceil(state.total / state.limit) - 1) * state.limit;
+    const next = Math.min(lastOffset, Math.max(0, state.offset + direction * state.limit));
+    if (next === state.offset) return;
+    state.offset = next;
+    closeDetails();
+    runSearch();
   }
   function closeDetails() {
     const returnFocus = $('#details-panel').contains(document.activeElement);
@@ -362,6 +474,7 @@
     if (returnFocus) selectedRow?.focus();
   }
   async function showDetails(file) {
+    if (state.closed) return;
     state.selected = file.id;
     const requestId = ++state.detailsRequest;
     $$('.file-row').forEach(row => row.classList.toggle('selected', row.dataset.id === String(file.id)));
@@ -370,9 +483,13 @@
     renderDetails(file, null, true);
     try {
       const response = await api(`/api/file?id=${encodeURIComponent(file.id)}&text_offset=0&max_chars=10000`);
-      if (requestId !== state.detailsRequest) return;
+      if (state.closed || requestId !== state.detailsRequest) return;
       renderDetails(response.file || file, response, false);
-    } catch (error) { if (requestId === state.detailsRequest) renderDetails(file, { text_detail: error.message }, false); }
+    } catch (error) {
+      if (state.closed || requestId !== state.detailsRequest) return;
+      if (error.status === 404) closeDetails();
+      else renderDetails(file, { text_detail: error.message }, false);
+    }
   }
   function renderDetails(file, response, loading) {
     state.detailsState = { file, response, loading };
@@ -448,14 +565,18 @@
   async function startScan() {
     const body = { root: $('#source-root').value.trim(), label: $('#source-label').value.trim(), kind: $('#source-kind').value, location: $('#source-location').value.trim(), index_content: $('#source-content').checked };
     if ($('#source-id').value) body.source_id = $('#source-id').value;
+    const requestInstance = state.instanceId;
     const result = await api('/api/scan', { method: 'POST', body });
-    if (result.job) renderStatus({ ...(state.status || {}), job: result.job });
+    if (state.closed) return;
+    acceptJob(result, requestInstance);
     $('#source-dialog').close(); setView('index'); toast(t('Indeksiranje je pokrenuto.'));
     await refreshStatus();
   }
   async function startImport() {
+    const requestInstance = state.instanceId;
     const result = await api('/api/import', { method: 'POST', body: { path: $('#import-path').value.trim(), label: $('#import-label').value.trim(), kind: 'bluray', location: $('#import-location').value.trim() } });
-    if (result.job) renderStatus({ ...(state.status || {}), job: result.job });
+    if (state.closed) return;
+    acceptJob(result, requestInstance);
     $('#import-dialog').close(); setView('index'); toast(t('Uvoz kataloga je pokrenut.'));
     await refreshStatus();
   }
@@ -545,6 +666,9 @@
     try {
       await api('/api/shutdown', { method: 'POST', body: {} });
       state.closed = true;
+      state.statusEpoch++;
+      state.sourcesRequest++; state.sourcesController?.abort();
+      state.detailsRequest++;
       clearTimeout(state.pollTimer); clearTimeout(state.searchTimer); state.searchController?.abort();
       $('#shutdown-dialog').close();
       $('.app-shell').classList.add('app-closed');
@@ -581,8 +705,8 @@
   $('#clear-search').addEventListener('click', () => { $('#search-input').value = ''; searchChanged(true); $('#search-input').focus(); });
   ['#source-filter', '#ext-filter', '#sort-select'].forEach(selector => $(selector).addEventListener('change', () => searchChanged(true)));
   $('#reset-filters').addEventListener('click', () => { $('#search-input').value = ''; $('#source-filter').value = ''; $('#ext-filter').value = ''; searchChanged(true); });
-  $('#previous-page').addEventListener('click', () => { state.offset = Math.max(0, state.offset - state.limit); closeDetails(); runSearch(); });
-  $('#next-page').addEventListener('click', () => { state.offset += state.limit; closeDetails(); runSearch(); });
+  $('#previous-page').addEventListener('click', () => changePage(-1));
+  $('#next-page').addEventListener('click', () => changePage(1));
   $('#source-form').addEventListener('submit', event => submitForm(event, '#source-form-error', startScan));
   $('#import-form').addEventListener('submit', event => submitForm(event, '#import-form-error', startImport));
   $('#export-form').addEventListener('submit', event => submitForm(event, '#export-form-error', exportCatalog));
@@ -641,7 +765,11 @@
 
   async function initialize() {
     setView(location.hash.slice(1));
-    try { state.token = (await api('/api/session')).token; } catch (error) { connection(false, error.message); }
+    try {
+      const session = await api('/api/session');
+      state.token = session.token;
+      if (session.instance_id) state.instanceId = session.instance_id;
+    } catch (error) { connection(false, error.message); }
     await refreshStatus();
     await loadSources();
     await runSearch();

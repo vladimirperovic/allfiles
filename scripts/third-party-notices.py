@@ -10,7 +10,7 @@ import sys
 
 metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8-sig"))
 toolchain = pathlib.Path(sys.argv[2])
-sections = ["ALLFILES — THIRD-PARTY NOTICES\n\nAllFiles 0.3 uses Rust and native SQLite. These notices do not license AllFiles itself.\nThis conservative inventory includes all Cargo.lock packages, including build/test and platform-specific dependencies that may not be linked in a particular binary.\nSource license declarations and supplied notice texts follow.\n"]
+sections = ["ALLFILES — THIRD-PARTY NOTICES\n\nAllFiles uses Rust and native SQLite. AllFiles itself is licensed separately in LICENSE.\nThis conservative inventory includes all Cargo.lock packages, including build/test and platform-specific dependencies that may not be linked in a particular binary.\nSource license declarations and supplied notice texts follow.\n"]
 shared_texts = {}
 def shared(text):
     text="\n".join(line.rstrip() for line in text.strip().replace("\r\n", "\n").splitlines())

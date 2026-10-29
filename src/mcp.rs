@@ -1,14 +1,36 @@
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::{
+    io::{AsyncWrite, AsyncWriteExt},
+    sync::{mpsc, oneshot},
+};
 const MODERN: &str = "2026-07-28";
 const LEGACY: &str = "2025-11-25";
-type Output = Arc<tokio::sync::Mutex<tokio::io::Stdout>>;
+// Keep the queue small and retain each request until its frame is flushed.
+// Once queued, a frame belongs to the writer, not its cancellable request.
+struct OutputFrame {
+    bytes: Vec<u8>,
+    complete: oneshot::Sender<()>,
+}
+type Output = mpsc::Sender<OutputFrame>;
+async fn write_output<W: AsyncWrite + Unpin>(
+    mut writer: W,
+    mut frames: mpsc::Receiver<OutputFrame>,
+) -> Result<()> {
+    while let Some(frame) = frames.recv().await {
+        writer.write_all(&frame.bytes).await?;
+        writer.flush().await?;
+        let _ = frame.complete.send(());
+    }
+    Ok(())
+}
 pub fn validate_url(raw: &str) -> Result<String> {
     let u = url::Url::parse(raw)?;
+    // Url normalizes an explicit :80 away. The exact comparison below still
+    // requires the caller to spell the port and rejects paths/credentials.
     let port = u
-        .port()
+        .port_or_known_default()
         .ok_or_else(|| anyhow::anyhow!("Explicit local port required"))?;
     let base = format!("http://127.0.0.1:{port}");
     if port == 0 || !(raw == base || raw == format!("{base}/")) {
@@ -25,7 +47,13 @@ fn capabilities() -> Value {
 fn versions() -> Value {
     json!([MODERN, LEGACY, "2025-06-18", "2025-03-26"])
 }
-async fn write(out: &Output, id: Value, mut result: Value, error: Option<Value>, modern: bool) {
+async fn write(
+    out: &Output,
+    id: Value,
+    mut result: Value,
+    error: Option<Value>,
+    modern: bool,
+) -> Result<()> {
     let response = if let Some(e) = error {
         json!({"jsonrpc":"2.0","id":id,"error":e})
     } else {
@@ -35,13 +63,17 @@ async fn write(out: &Output, id: Value, mut result: Value, error: Option<Value>,
         }
         json!({"jsonrpc":"2.0","id":id,"result":result})
     };
-    let mut bytes = serde_json::to_vec(&response).unwrap();
+    let mut bytes = serde_json::to_vec(&response)?;
     bytes.push(b'\n');
-    let mut w = out.lock().await;
-    let _ = w.write_all(&bytes).await;
-    let _ = w.flush().await;
+    let (complete, flushed) = oneshot::channel();
+    out.send(OutputFrame { bytes, complete })
+        .await
+        .map_err(|_| anyhow::anyhow!("MCP output is closed"))?;
+    flushed
+        .await
+        .map_err(|_| anyhow::anyhow!("MCP output is closed"))
 }
-async fn error(out: &Output, id: Value, code: i64, message: &str) {
+async fn error(out: &Output, id: Value, code: i64, message: &str) -> Result<()> {
     write(
         out,
         id,
@@ -49,19 +81,17 @@ async fn error(out: &Output, id: Value, code: i64, message: &str) {
         Some(json!({"code":code,"message":message})),
         false,
     )
-    .await;
+    .await
 }
-async fn frame(
-    reader: &mut tokio::io::BufReader<tokio::io::Stdin>,
-    buffer: &mut Vec<u8>,
-) -> Result<Option<Vec<u8>>> {
+fn frame(reader: &mut impl std::io::BufRead) -> Result<Option<Vec<u8>>> {
+    let mut buffer = Vec::new();
     loop {
-        let chunk = reader.fill_buf().await?;
+        let chunk = reader.fill_buf()?;
         if chunk.is_empty() {
             return if buffer.is_empty() {
                 Ok(None)
             } else {
-                Ok(Some(std::mem::take(buffer)))
+                Ok(Some(buffer))
             };
         }
         let n = chunk
@@ -76,10 +106,35 @@ async fn frame(
         buffer.extend_from_slice(&chunk[..n]);
         reader.consume(n);
         if ended {
-            return Ok(Some(std::mem::take(buffer)));
+            return Ok(Some(buffer));
         }
     }
 }
+fn stdin_frames() -> Result<mpsc::Receiver<Result<Vec<u8>>>> {
+    let (send, receive) = mpsc::channel(1);
+    // Tokio stdin uses a blocking-pool read that runtime shutdown cannot
+    // cancel. A dedicated thread lets this stdio process exit on a broken
+    // output pipe or signal even when the client keeps its input pipe open.
+    // Both the input queue and each frame remain bounded.
+    std::thread::Builder::new()
+        .name("allfiles-mcp-stdin".into())
+        .spawn(move || {
+            let mut reader = std::io::stdin().lock();
+            loop {
+                let message = match frame(&mut reader) {
+                    Ok(Some(bytes)) => Ok(bytes),
+                    Ok(None) => break,
+                    Err(error) => Err(error),
+                };
+                let failed = message.is_err();
+                if send.blocking_send(message).is_err() || failed {
+                    break;
+                }
+            }
+        })?;
+    Ok(receive)
+}
+
 pub async fn run(raw: &str) -> Result<()> {
     let bridge = Arc::new(Bridge {
         base: validate_url(raw)?,
@@ -90,60 +145,199 @@ pub async fn run(raw: &str) -> Result<()> {
             .timeout(Duration::from_secs(25))
             .build()?,
     });
-    let out = Arc::new(tokio::sync::Mutex::new(tokio::io::stdout()));
-    let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-    let mut buffer = Vec::new();
     let tools: Value = serde_json::from_str(include_str!("mcp_tools.json"))?;
+    let mut reader = stdin_frames()?;
+    let (out, frames) = mpsc::channel(1);
+    let mut writer = tokio::spawn(write_output(tokio::io::stdout(), frames));
+    let mut writer_result = None;
     let mut legacy = String::new();
     let mut ready = false;
-    let mut active: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
-    let result=async {
-        loop{
-            let line=tokio::select!{_=crate::shutdown_signal()=>break,line=frame(&mut reader,&mut buffer)=>line?};let Some(line)=line else{break;};if line.iter().all(|b|b.is_ascii_whitespace()){continue;}
-            let r:Value=match serde_json::from_slice(&line){Ok(r)=>r,Err(_)=>{error(&out,Value::Null,-32700,"Invalid JSON").await;continue;}};
-            let method=r["method"].as_str().unwrap_or("");let id=r.get("id").cloned();
-            if !r.is_object()||r["jsonrpc"]!="2.0"||method.is_empty(){error(&out,Value::Null,-32600,"Invalid JSON-RPC request").await;continue;}
-            if id.is_none(){match method{"notifications/initialized"=>{if !legacy.is_empty(){ready=true;}},"notifications/cancelled"=>{if let Some(task)=active.remove(&r["params"]["requestId"].to_string()){task.abort();}},_=>{}}continue;}
-            let id=id.unwrap();if !(id.is_string()||id.is_i64()||id.is_u64())||id.to_string().len()>256{error(&out,Value::Null,-32600,"Request ID must be a string or integer").await;continue;}
-            let params=r.get("params").cloned().unwrap_or(json!({}));if !params.is_object(){error(&out,id,-32602,"Parameters must be an object").await;continue;}
-            if params.get("_meta").is_some_and(|v|!v.is_object()){error(&out,id,-32602,"Invalid request metadata").await;continue;}
-            let version=&params["_meta"]["io.modelcontextprotocol/protocolVersion"];let modern=!version.is_null()||method=="server/discover";
-            if modern{
-                if version.as_str().unwrap_or("").is_empty(){error(&out,id,-32602,"Missing per-request protocol version").await;continue;}
-                if version!=MODERN{write(&out,id,json!({}),Some(json!({"code":-32022,"message":"Unsupported protocol version","data":{"requested":version,"supported":versions()}})),true).await;continue;}
-                if !params["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object(){error(&out,id,-32602,"Missing per-request client capabilities").await;continue;}
+    let mut input_closed = false;
+    let mut tasks = tokio::task::JoinSet::<Result<()>>::new();
+    let mut active: HashMap<String, tokio::task::AbortHandle> = HashMap::new();
+    let result = async {
+        loop {
+            // A clean EOF finishes already accepted requests. On cancellation
+            // or a transport error the cleanup below instead aborts them.
+            if input_closed && tasks.is_empty() {
+                break;
             }
-            if method=="initialize"&&!modern{
-                if !legacy.is_empty(){error(&out,id,-32600,"Already initialized").await;continue;}
-                let version=params["protocolVersion"].as_str().unwrap_or("");
-                if version.is_empty()||!params["capabilities"].is_object()||params["clientInfo"]["name"].as_str().unwrap_or("").is_empty()||params["clientInfo"]["version"].as_str().unwrap_or("").is_empty(){error(&out,id,-32602,"initialize requires protocolVersion, capabilities and clientInfo").await;continue;}
-                legacy=if [LEGACY,"2025-06-18","2025-03-26"].contains(&version){version}else{LEGACY}.into();
-                write(&out,id,json!({"protocolVersion":legacy,"capabilities":capabilities(),"serverInfo":info(),"instructions":include_str!("mcp_instructions.txt")}),None,false).await;continue;
+            let line = tokio::select! {
+                finished = &mut writer => {
+                    writer_result = Some(finished.map_err(anyhow::Error::from).and_then(|r| r));
+                    break;
+                }
+                _ = crate::shutdown_signal() => break,
+                finished = tasks.join_next(), if !tasks.is_empty() => {
+                    match finished {
+                        Some(Ok(result)) => result?,
+                        Some(Err(e)) if !e.is_cancelled() => return Err(e.into()),
+                        _ => {}
+                    }
+                    continue;
+                }
+                line = reader.recv(), if !input_closed => {
+                    let Some(line) = line else {
+                        input_closed = true;
+                        continue;
+                    };
+                    line?
+                }
+            };
+            if line.iter().all(|b| b.is_ascii_whitespace()) {
+                continue;
             }
-            if method=="ping"&&!modern{write(&out,id,json!({}),None,false).await;continue;}
-            if !modern&&!ready{error(&out,id,-32602,"Initialize the MCP connection first").await;continue;}
-            match method{
-                "server/discover"=>write(&out,id,json!({"supportedVersions":versions(),"capabilities":capabilities(),"instructions":include_str!("mcp_instructions.txt")}),None,modern).await,
-                "tools/list"=>{if params.get("cursor").is_some_and(|v|v!=""){error(&out,id,-32602,"Unknown tools cursor").await;}else{write(&out,id,json!({"tools":tools}),None,modern).await;}},
-                "tools/call"=>{
-                    let name=params["name"].as_str().unwrap_or("");let tool=tools.as_array().unwrap().iter().find(|t|t["name"]==name);
-                    if tool.is_none()||params.get("task").is_some(){error(&out,id,-32602,"Unknown tool or unsupported task execution").await;continue;}
-                    active.retain(|_,h|!h.is_finished());let key=id.to_string();if active.len()>=8||active.contains_key(&key){error(&out,id,-32600,"Duplicate active request ID or too many concurrent requests").await;continue;}
-                    let tool=tool.unwrap().clone();let args=params.get("arguments").cloned().unwrap_or(json!({}));let b=bridge.clone();let out=out.clone();let structured=modern||legacy!="2025-03-26";
-                    active.insert(key,tokio::spawn(async move{let result=match b.call(&tool,args).await{Ok(data)=>{let mut v=json!({"content":[{"type":"text","text":data.to_string()}],"isError":false});if structured{v["structuredContent"]=data;}v},Err(e)=>json!({"content":[{"type":"text","text":e.to_string()}],"isError":true})};write(&out,id,result,None,modern).await;}));
-                },
-                _=>error(&out,id,-32601,"Method not found").await,
+            let r: Value = match serde_json::from_slice(&line) {
+                Ok(r) => r,
+                Err(_) => {
+                    error(&out, Value::Null, -32700, "Invalid JSON").await?;
+                    continue;
+                }
+            };
+            let method = r["method"].as_str().unwrap_or("");
+            let id = r.get("id").cloned();
+            if !r.is_object() || r["jsonrpc"] != "2.0" || method.is_empty() {
+                error(&out, Value::Null, -32600, "Invalid JSON-RPC request").await?;
+                continue;
             }
-        }Ok::<(),anyhow::Error>(())
+            if id.is_none() {
+                match method {
+                    "notifications/initialized" if !legacy.is_empty() => ready = true,
+                    "notifications/cancelled" => {
+                        if let Some(task) = active.remove(&r["params"]["requestId"].to_string()) {
+                            task.abort();
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            let id = id.unwrap();
+            if !(id.is_string() || id.is_i64() || id.is_u64()) || id.to_string().len() > 256 {
+                error(&out, Value::Null, -32600, "Request ID must be a string or integer").await?;
+                continue;
+            }
+            let params = r.get("params").cloned().unwrap_or(json!({}));
+            if !params.is_object() {
+                error(&out, id, -32602, "Parameters must be an object").await?;
+                continue;
+            }
+            if params.get("_meta").is_some_and(|v| !v.is_object()) {
+                error(&out, id, -32602, "Invalid request metadata").await?;
+                continue;
+            }
+            let version = &params["_meta"]["io.modelcontextprotocol/protocolVersion"];
+            let modern = !version.is_null() || method == "server/discover";
+            if modern {
+                if version.as_str().unwrap_or("").is_empty() {
+                    error(&out, id, -32602, "Missing per-request protocol version").await?;
+                    continue;
+                }
+                if version != MODERN {
+                    write(&out, id, json!({}), Some(json!({
+                        "code": -32022, "message": "Unsupported protocol version",
+                        "data": {"requested": version, "supported": versions()}
+                    })), true).await?;
+                    continue;
+                }
+                if !params["_meta"]["io.modelcontextprotocol/clientCapabilities"].is_object() {
+                    error(&out, id, -32602, "Missing per-request client capabilities").await?;
+                    continue;
+                }
+            }
+            if method == "initialize" && !modern {
+                if !legacy.is_empty() {
+                    error(&out, id, -32600, "Already initialized").await?;
+                    continue;
+                }
+                let version = params["protocolVersion"].as_str().unwrap_or("");
+                if version.is_empty()
+                    || !params["capabilities"].is_object()
+                    || params["clientInfo"]["name"].as_str().unwrap_or("").is_empty()
+                    || params["clientInfo"]["version"].as_str().unwrap_or("").is_empty()
+                {
+                    error(&out, id, -32602, "initialize requires protocolVersion, capabilities and clientInfo").await?;
+                    continue;
+                }
+                legacy = if [LEGACY, "2025-06-18", "2025-03-26"].contains(&version) {
+                    version
+                } else {
+                    LEGACY
+                }.into();
+                write(&out, id, json!({
+                    "protocolVersion": legacy, "capabilities": capabilities(),
+                    "serverInfo": info(), "instructions": include_str!("mcp_instructions.txt")
+                }), None, false).await?;
+                continue;
+            }
+            if method == "ping" && !modern {
+                write(&out, id, json!({}), None, false).await?;
+                continue;
+            }
+            if !modern && !ready {
+                error(&out, id, -32602, "Initialize the MCP connection first").await?;
+                continue;
+            }
+            match method {
+                "server/discover" => write(&out, id, json!({
+                    "supportedVersions": versions(), "capabilities": capabilities(),
+                    "instructions": include_str!("mcp_instructions.txt")
+                }), None, modern).await?,
+                "tools/list" => {
+                    if params.get("cursor").is_some_and(|v| v != "") {
+                        error(&out, id, -32602, "Unknown tools cursor").await?;
+                    } else {
+                        write(&out, id, json!({"tools": tools}), None, modern).await?;
+                    }
+                }
+                "tools/call" => {
+                    let name = params["name"].as_str().unwrap_or("");
+                    let tool = tools.as_array().unwrap().iter().find(|t| t["name"] == name);
+                    if tool.is_none() || params.get("task").is_some() {
+                        error(&out, id, -32602, "Unknown tool or unsupported task execution").await?;
+                        continue;
+                    }
+                    active.retain(|_, h| !h.is_finished());
+                    let key = id.to_string();
+                    if active.len() >= 8 || active.contains_key(&key) {
+                        error(&out, id, -32600, "Duplicate active request ID or too many concurrent requests").await?;
+                        continue;
+                    }
+                    let tool = tool.unwrap().clone();
+                    let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                    let b = bridge.clone();
+                    let out = out.clone();
+                    let structured = modern || legacy != "2025-03-26";
+                    active.insert(key, tasks.spawn(async move {
+                        let result = match b.call(&tool, args).await {
+                            Ok(data) => {
+                                let mut v = json!({"content": [{"type": "text", "text": data.to_string()}], "isError": false});
+                                if structured {
+                                    v["structuredContent"] = data;
+                                }
+                                v
+                            }
+                            Err(e) => json!({"content": [{"type": "text", "text": e.to_string()}], "isError": true}),
+                        };
+                        write(&out, id, result, None, modern).await
+                    }));
+                }
+                _ => error(&out, id, -32601, "Method not found").await?,
+            }
+        }
+        Ok::<(), anyhow::Error>(())
     }.await;
-    for task in active.values() {
-        task.abort();
-    }
-    for (_, task) in active {
-        let _ = task.await;
-    }
-    result
+    tasks.shutdown().await;
+    drop(out);
+    // The independent writer drains accepted frames even if the originating
+    // request was aborted; neither cancellation nor EOF can splice JSON lines.
+    let written = match writer_result {
+        Some(result) => result,
+        None => writer.await?,
+    };
+    result.and(written)
 }
+
 pub fn validate(tool: &Value, args: &Value) -> Result<()> {
     let object = args
         .as_object()
@@ -341,5 +535,153 @@ impl Bridge {
             }
             _ => bail!("Unknown tool"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[test]
+    fn local_url_requires_explicit_canonical_port_including_http_default() -> Result<()> {
+        for port in [1, 80, 8787, 65535] {
+            let base = format!("http://127.0.0.1:{port}");
+            assert_eq!(validate_url(&base)?, base);
+            assert_eq!(validate_url(&format!("{base}/"))?, base);
+        }
+        for raw in [
+            "http://127.0.0.1",
+            "http://127.0.0.1/",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:080",
+            "http://127.0.0.1:80?",
+            "http://127.0.0.1:80/#",
+            "http://127.0.0.1:80/path",
+            "http://user@127.0.0.1:80",
+            "http://localhost:80",
+            "http://127.1:80",
+            "https://127.0.0.1:443",
+            "http://[::1]:80",
+        ] {
+            assert!(validate_url(raw).is_err(), "accepted {raw}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn input_frames_handle_partial_eof_and_reject_oversize() -> Result<()> {
+        let mut reader = std::io::Cursor::new(b"first\nlast");
+        assert_eq!(frame(&mut reader)?, Some(b"first\n".to_vec()));
+        assert_eq!(frame(&mut reader)?, Some(b"last".to_vec()));
+        assert!(frame(&mut reader)?.is_none());
+        let mut reader = std::io::Cursor::new(vec![b'x'; (1 << 20) + 1]);
+        assert!(frame(&mut reader).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_request_cannot_truncate_its_started_frame() -> Result<()> {
+        let (mut reader, writer) = tokio::io::duplex(16);
+        let (out, frames) = mpsc::channel(1);
+        let writer = tokio::spawn(write_output(writer, frames));
+        let text = "private document ".repeat(100);
+        let first_output = out.clone();
+        let expected = text.clone();
+        let request = tokio::spawn(async move {
+            write(&first_output, json!(1), json!({"text": text}), None, false).await
+        });
+        let mut prefix = [0u8; 8];
+        tokio::time::timeout(Duration::from_secs(2), reader.read_exact(&mut prefix)).await??;
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        let second_output = out.clone();
+        let ping =
+            tokio::spawn(
+                async move { write(&second_output, json!(2), json!({}), None, false).await },
+            );
+        drop(out);
+        let mut bytes = prefix.to_vec();
+        tokio::time::timeout(Duration::from_secs(2), reader.read_to_end(&mut bytes)).await??;
+        ping.await??;
+        writer.await??;
+        let frames = bytes
+            .split(|b| *b == b'\n')
+            .filter(|line| !line.is_empty())
+            .map(serde_json::from_slice::<Value>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0]["id"], 1);
+        assert_eq!(frames[0]["result"]["text"], expected);
+        assert_eq!(frames[1]["id"], 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn output_queue_and_request_completion_apply_backpressure() -> Result<()> {
+        let (mut reader, writer) = tokio::io::duplex(8);
+        let (out, frames) = mpsc::channel(1);
+        let writer = tokio::spawn(write_output(writer, frames));
+        let first_output = out.clone();
+        let first = tokio::spawn(async move {
+            write(
+                &first_output,
+                json!(1),
+                json!({"text": "a".repeat(256)}),
+                None,
+                false,
+            )
+            .await
+        });
+        let mut prefix = [0u8; 1];
+        tokio::time::timeout(Duration::from_secs(2), reader.read_exact(&mut prefix)).await??;
+        let second_output = out.clone();
+        let second =
+            tokio::spawn(
+                async move { write(&second_output, json!(2), json!({}), None, false).await },
+            );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while out.capacity() != 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        assert!(
+            !first.is_finished(),
+            "request must wait for its frame to flush"
+        );
+        assert!(!second.is_finished());
+        let (complete, _) = oneshot::channel();
+        assert!(matches!(
+            out.try_send(OutputFrame {
+                bytes: b"{}\n".to_vec(),
+                complete
+            }),
+            Err(mpsc::error::TrySendError::Full(_))
+        ));
+        drop(out);
+        let mut rest = Vec::new();
+        tokio::time::timeout(Duration::from_secs(2), reader.read_to_end(&mut rest)).await??;
+        first.await??;
+        second.await??;
+        writer.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn output_failure_releases_a_waiting_request() -> Result<()> {
+        let (reader, writer) = tokio::io::duplex(8);
+        drop(reader);
+        let (out, frames) = mpsc::channel(1);
+        let writer = tokio::spawn(write_output(writer, frames));
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            write(&out, json!(1), json!({}), None, false),
+        )
+        .await?;
+        assert!(result.is_err());
+        assert!(writer.await?.is_err());
+        Ok(())
     }
 }

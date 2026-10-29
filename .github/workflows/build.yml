@@ -2,6 +2,8 @@ name: Build and test
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
     inputs:
@@ -19,6 +21,8 @@ jobs:
     name: Rust on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      PYTHONUTF8: '1'
     strategy:
       fail-fast: false
       matrix:
@@ -39,32 +43,81 @@ jobs:
             name: allfiles-windows-amd64.exe
             extension: .exe
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Check release version consistency
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: python scripts/check-version.py
+      - name: Check fixture SQLite capabilities
+        shell: bash
+        run: python -c "import sqlite3; c=sqlite3.connect(':memory:'); c.execute('CREATE VIRTUAL TABLE probe USING fts5(text, tokenize=trigram, content=\"\", contentless_delete=1)'); print('Fixture SQLite', sqlite3.sqlite_version)"
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
       - run: cargo +1.99.1 fmt --check
       - run: cargo +1.99.1 clippy --locked --all-targets -- -D warnings
       - run: cargo +1.99.1 test --locked
       - run: cargo +1.99.1 build --locked --release
+      - name: Verify executable version
+        run: ./target/release/allfiles${{ matrix.extension }} --version
       - name: HTTP and MCP integration
         run: python scripts/smoke.py target/release/allfiles${{ matrix.extension }}
+      - name: Audit regression scenarios
+        shell: bash
+        run: |
+          python scripts/audit_search.py target/release/allfiles${{ matrix.extension }}
+          python scripts/audit_storage.py --binary target/release/allfiles${{ matrix.extension }} --output audit-results/storage.json
+          python scripts/audit_extract.py target/release/allfiles${{ matrix.extension }}
+          python scripts/audit-server-mcp.py target/release/allfiles${{ matrix.extension }}
+          node scripts/audit_frontend.cjs
+          python scripts/audit2_storage.py --binary target/release/allfiles${{ matrix.extension }} --output audit-results/storage-lifecycle.json
+          python scripts/audit2_ui_contract.py target/release/allfiles${{ matrix.extension }} audit-results/ui-contract.json
+          python scripts/audit2_import_order.py --binary target/release/allfiles${{ matrix.extension }} --output audit-results/import-order.json
+          node scripts/audit2_frontend.cjs
       - name: Package binary and notices
         shell: bash
         env:
           BINARY_NAME: ${{ matrix.name }}
           EXTENSION: ${{ matrix.extension }}
         run: |
-          mkdir -p dist
-          cp "target/release/allfiles$EXTENSION" "dist/$BINARY_NAME"
-          cp README.md README.en.md THIRD_PARTY_NOTICES.txt dist/
-          python -c 'import hashlib,pathlib,os; p=pathlib.Path("dist")/os.environ["BINARY_NAME"]; (p.parent/"SHA256SUMS").write_text(hashlib.sha256(p.read_bytes()).hexdigest()+"  "+p.name+"\n")'
-          tar -czf "dist/${BINARY_NAME%.exe}.tar.gz" -C dist "$BINARY_NAME" README.md README.en.md THIRD_PARTY_NOTICES.txt SHA256SUMS
-      - uses: actions/upload-artifact@v7
-        if: github.event_name == 'workflow_dispatch' && inputs.upload_artifacts
+          platform="${BINARY_NAME#allfiles-}"
+          python scripts/package-release.py --binary "target/release/allfiles$EXTENSION" --platform "${platform%.exe}" --output dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.upload_artifacts)
         with:
           name: ${{ matrix.name }}
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
           if-no-files-found: error
           retention-days: 30
+  release:
+    name: Publish verified release archives
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          pattern: allfiles-*
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python scripts/prepare-release.py --directory dist
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt --title "AllFiles ${GITHUB_REF_NAME#v}" --notes-file RELEASE_NOTES.md --verify-tag --latest

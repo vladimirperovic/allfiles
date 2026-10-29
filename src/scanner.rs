@@ -1,6 +1,6 @@
 use crate::{
     crypto, extract,
-    store::{Content, IndexedFile, ScanOptions, ScannedFile, Store},
+    store::{Content, IndexedFile, ScanOptions, ScannedFile, Store, file_version},
 };
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 // Rows per catalog transaction while walking or importing. Larger batches mean
 // fewer synchronous commits; each still holds the store lock only briefly.
@@ -36,12 +36,17 @@ pub fn check(cancel: &AtomicBool) -> Result<()> {
     Ok(())
 }
 pub fn modified(meta: &fs::Metadata) -> Result<(i64, i64)> {
-    let time = meta.modified()?;
+    timestamp(meta.modified()?)
+}
+fn timestamp(time: SystemTime) -> Result<(i64, i64)> {
     let ns = match time.duration_since(UNIX_EPOCH) {
-        Ok(d) => i64::try_from(d.as_nanos())?,
-        Err(e) => -i64::try_from(e.duration().as_nanos())?,
+        Ok(d) => i128::try_from(d.as_nanos())?,
+        Err(e) => -i128::try_from(e.duration().as_nanos())?,
     };
-    Ok((ns.div_euclid(1_000_000_000), ns))
+    // SQLite stores two i64 values. Preserve the actual seconds for display,
+    // and the nanoseconds modulo 2^64 for the version token. file_version
+    // includes seconds for out-of-range dates so wrapped values cannot alias.
+    Ok((i64::try_from(ns.div_euclid(1_000_000_000))?, ns as i64))
 }
 pub fn scan(
     store: &SharedStore,
@@ -218,8 +223,8 @@ fn flush(
             let path: PathBuf = root.join(&item.relative);
             let extracted = match fs::symlink_metadata(&path) {
                 Ok(meta) => {
-                    let (_, ns) = modified(&meta)?;
-                    if format!("{}:{ns}", meta.len()) != item.version {
+                    let (seconds, ns) = modified(&meta)?;
+                    if file_version(i64::try_from(meta.len())?, seconds, ns) != item.version {
                         extract::Extracted::error(
                             "File changed after metadata scanning; scan again to index its current contents.",
                         )
@@ -264,4 +269,52 @@ fn record(store: &SharedStore, pending: &mut Vec<(IndexedFile, extract::Extracte
     store.lock().unwrap().record_contents(&items)?;
     pending.clear();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamps_cover_filesystem_dates_and_preserve_version_precision() -> Result<()> {
+        for seconds in [
+            -11_612_937_600i64,
+            -9_223_372_037,
+            -1,
+            0,
+            1,
+            9_223_372_037,
+            32_503_680_000,
+        ] {
+            let base = if seconds < 0 {
+                UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs()))
+            } else {
+                UNIX_EPOCH.checked_add(Duration::from_secs(seconds as u64))
+            }
+            .expect("filesystem date must fit SystemTime");
+            // Windows SystemTime has 100 ns resolution.
+            let time = base + Duration::from_nanos(123_400);
+            let (actual_seconds, ns) = timestamp(time)?;
+            assert_eq!(actual_seconds, seconds);
+            let (_, next_ns) = timestamp(time + Duration::from_nanos(100))?;
+            assert_ne!(
+                file_version(20, seconds, ns),
+                file_version(20, seconds, next_ns)
+            );
+            if i64::try_from(seconds as i128 * 1_000_000_000 + 123_400).is_ok() {
+                assert_eq!(file_version(20, seconds, ns), format!("20:{ns}"));
+            } else {
+                assert_eq!(file_version(20, seconds, ns), format!("20:{seconds}:{ns}"));
+                assert_ne!(
+                    file_version(20, seconds, ns),
+                    file_version(20, ns.div_euclid(1_000_000_000), ns)
+                );
+            }
+        }
+        assert_eq!(
+            timestamp(UNIX_EPOCH - Duration::from_nanos(100))?,
+            (-1, -100)
+        );
+        Ok(())
+    }
 }

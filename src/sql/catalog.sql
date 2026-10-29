@@ -4,6 +4,7 @@ PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; P
  CREATE TABLE IF NOT EXISTS directories(id INTEGER PRIMARY KEY,source_id TEXT NOT NULL REFERENCES sources(id),path TEXT NOT NULL,search_path TEXT NOT NULL,UNIQUE(source_id,path));
  CREATE TABLE IF NOT EXISTS files(id INTEGER PRIMARY KEY AUTOINCREMENT,source_id TEXT NOT NULL REFERENCES sources(id),dir_id INTEGER NOT NULL REFERENCES directories(id),name TEXT NOT NULL,search_name TEXT NOT NULL,extension TEXT NOT NULL,size INTEGER NOT NULL,modified INTEGER NOT NULL,modified_ns INTEGER NOT NULL,version TEXT NOT NULL,seen_scan TEXT NOT NULL,text_status TEXT NOT NULL DEFAULT 'not_indexed',text_detail TEXT NOT NULL DEFAULT '',UNIQUE(dir_id,name));
  CREATE INDEX IF NOT EXISTS files_source ON files(source_id);
+ CREATE INDEX IF NOT EXISTS files_source_size ON files(source_id,size);
  CREATE INDEX IF NOT EXISTS files_name ON files(search_name);
  CREATE INDEX IF NOT EXISTS files_ext ON files(extension);
  CREATE INDEX IF NOT EXISTS files_modified ON files(modified DESC);

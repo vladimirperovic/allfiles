@@ -1,6 +1,6 @@
 ALLFILES — THIRD-PARTY NOTICES
 
-AllFiles 0.3 uses Rust and native SQLite. These notices do not license AllFiles itself.
+AllFiles uses Rust and native SQLite. AllFiles itself is licensed separately in LICENSE.
 This conservative inventory includes all Cargo.lock packages, including build/test and platform-specific dependencies that may not be linked in a particular binary.
 Source license declarations and supplied notice texts follow.
 

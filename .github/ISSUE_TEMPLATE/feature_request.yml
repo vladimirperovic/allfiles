@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an improvement to local cataloging, search or usability.
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        English or Serbian is welcome. Explain the task you want to accomplish with a fictional example.
+        Do not attach private catalogs or documents. For bugs use the bug report; for vulnerabilities follow [SECURITY.md](https://github.com/vladimirperovic/allfiles/blob/main/SECURITY.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe your workflow and what currently gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the outcome you want and give a small example. Mention the platform if it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or additional context
+      description: Optional workarounds, related issues or tradeoffs. Note any need for network access or changes to catalog compatibility.

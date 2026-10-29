@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible problem using fictional data.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports in English or Serbian are welcome. Describe one problem per issue.
+        Use a small generated example; do not upload catalogs, private documents, passwords, tokens, `encryption.json`, or personal paths.
+        For security vulnerabilities, follow [SECURITY.md](https://github.com/vladimirperovic/allfiles/blob/main/SECURITY.md) instead of posting details here.
+  - type: input
+    id: version
+    attributes:
+      label: AllFiles version
+      description: Copy the version from the interface or `allfiles --version`; for source builds, include the commit if known.
+      placeholder: "0.1.5, downloaded package"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS version and architecture. Add the browser or MCP client/version when relevant.
+      placeholder: "Windows 11, x86-64, Firefox; local unencrypted test catalog"
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+      description: Describe what you expected, what happened, and whether it happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Prefer a new temporary catalog with fictional filenames/text. Include sanitized commands, search terms or small generated input when needed.
+      placeholder: |
+        1. Create a temporary folder with ...
+        2. Run or click ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional error output. Remove names, personal paths, passwords and tokens before pasting.
+      render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed private documents, catalog data, personal paths, passwords and tokens from this report and any attachments.
+          required: true
+        - label: I searched existing issues for the same problem.

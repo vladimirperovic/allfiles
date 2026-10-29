@@ -490,7 +490,7 @@ fn paged_large_text_and_content_owner_guard() -> anyhow::Result<()> {
     assert_eq!(page["total_chars"], 500_000);
     assert_eq!(page["has_more"], false);
     let other = tempfile::tempdir()?;
-    let mut other = Store::open(other.path(), "")?;
+    let other = Store::open(other.path(), "")?;
     other.ensure_content(true)?;
     let other_path = other.dir.clone();
     drop(other);
@@ -499,7 +499,7 @@ fn paged_large_text_and_content_owner_guard() -> anyhow::Result<()> {
         other_path.join("content.sqlite"),
         temp.path().join("content.sqlite"),
     )?;
-    let mut s = Store::open(temp.path(), "")?;
+    let s = Store::open(temp.path(), "")?;
     assert!(s.ensure_content(false).is_err());
     Ok(())
 }
@@ -639,6 +639,574 @@ fn snippets_ignore_diacritics_and_stop_early() -> anyhow::Result<()> {
         ("Plan A", "plan a"),
     ] {
         assert_eq!(fold(name), folded);
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_size_overflow_rolls_back_and_keeps_integer_counters() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://size-boundary".into(),
+        ..Default::default()
+    })?;
+    let mut largest = entry("largest.txt");
+    largest.size = i64::MAX;
+    let indexed = s
+        .upsert(&source.id, "initial", &[largest.clone()])?
+        .remove(0);
+    // Updating content at the maximum total must not overflow transiently by
+    // adding the new size before subtracting the old size.
+    s.record_content(
+        indexed.id,
+        &indexed.version,
+        "indexed",
+        "boundary needle",
+        "",
+    )?;
+    assert_eq!(s.stats()?["bytes"], i64::MAX);
+    assert_eq!(s.stats()?["documents"], 1);
+    let extra = entry("extra.txt");
+    assert!(
+        s.upsert(&source.id, "overflow", std::slice::from_ref(&extra))
+            .is_err()
+    );
+    assert_eq!(s.stats()?["files"], 1);
+    assert_eq!(s.stats()?["bytes"], i64::MAX);
+    assert_eq!(s.file(indexed.id, 0, 100)?["text"], "boundary needle");
+    assert_eq!(s.search(SearchOptions::default())?.total, 1);
+    // An overflowing update must retain both the old metadata and its text.
+    largest.size -= extra.size;
+    s.upsert(&source.id, "shrink", &[largest.clone(), extra.clone()])?;
+    assert_eq!(s.stats()?["bytes"], i64::MAX);
+    largest.size = i64::MAX;
+    assert!(
+        s.upsert(&source.id, "overflow-update", &[largest.clone()])
+            .is_err()
+    );
+    assert_eq!(s.metadata(indexed.id)?.size, i64::MAX - extra.size);
+    assert_eq!(s.stats()?["bytes"], i64::MAX);
+    // Roll back the whole batch, including a valid earlier decrease.
+    largest.size = 10;
+    let mut overflow = entry("overflow.txt");
+    overflow.size = i64::MAX;
+    assert!(
+        s.upsert(&source.id, "batch-overflow", &[largest, overflow])
+            .is_err()
+    );
+    assert_eq!(s.metadata(indexed.id)?.size, i64::MAX - extra.size);
+    assert_eq!(s.stats()?["files"], 2);
+    let kind: String = s
+        .conn
+        .query_row("SELECT typeof(bytes) FROM catalog_stats", [], |r| r.get(0))?;
+    assert_eq!(kind, "integer");
+    drop(s);
+    let mut reopened = Store::open(temp.path(), "")?;
+    assert_eq!(reopened.stats()?["bytes"], i64::MAX);
+    let out = temp.path().join("copy");
+    reopened.export(&out, true, None)?;
+    assert_eq!(Store::open(&out, "")?.stats()?["bytes"], i64::MAX);
+    Ok(())
+}
+
+#[test]
+fn stats_upgrade_replaces_legacy_triggers_without_recounting_on_reopen() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://stats-upgrade".into(),
+        ..Default::default()
+    })?;
+    let mut largest = entry("large.bin");
+    largest.size = i64::MAX;
+    s.upsert(&source.id, "initial", &[largest])?;
+    // Simulate the trigger definitions in pre-fix Rust/Go catalogs.
+    s.conn.execute_batch("DELETE FROM meta WHERE key='stats_schema';
+        DROP TRIGGER stats_files_ai;
+        CREATE TRIGGER stats_files_ai AFTER INSERT ON files BEGIN
+        UPDATE catalog_stats SET files=files+1,bytes=bytes+new.size,documents=documents+(new.text_status IN('indexed','truncated')) WHERE id=1; END;
+        DROP TRIGGER stats_files_au;
+        CREATE TRIGGER stats_files_au AFTER UPDATE OF size,text_status ON files WHEN old.size!=new.size OR old.text_status!=new.text_status BEGIN
+        UPDATE catalog_stats SET bytes=bytes+new.size-old.size,documents=documents+(new.text_status IN('indexed','truncated'))-(old.text_status IN('indexed','truncated')) WHERE id=1; END;")?;
+    drop(s);
+    let mut upgraded = Store::open(temp.path(), "")?;
+    assert!(
+        upgraded
+            .upsert(&source.id, "overflow", &[entry("one.txt")])
+            .is_err()
+    );
+    assert_eq!(upgraded.stats()?["files"], 1);
+    let schema_version: i64 = upgraded
+        .conn
+        .query_row("PRAGMA schema_version", [], |r| r.get(0))?;
+    drop(upgraded);
+    let reopened = Store::open(temp.path(), "")?;
+    assert_eq!(
+        reopened
+            .conn
+            .query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))?,
+        schema_version
+    );
+    assert_eq!(reopened.stats()?["bytes"], i64::MAX);
+    Ok(())
+}
+
+#[test]
+fn cached_stats_initialization_does_not_scan_files() -> anyhow::Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut conn = rusqlite::Connection::open_in_memory()?;
+    conn.execute_batch(
+        "CREATE TABLE files(size INTEGER,text_status TEXT);CREATE TABLE sources(id TEXT);
+        WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<100000)
+        INSERT INTO files SELECT 1024,'indexed' FROM n;",
+    )?;
+    conn.execute_batch(include_str!("sql/stats.sql"))?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let progress = calls.clone();
+    conn.progress_handler(
+        1000,
+        Some(move || {
+            progress.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    )?;
+    conn.execute_batch(include_str!("sql/stats.sql"))?;
+    conn.progress_handler(0, None::<fn() -> bool>)?;
+    assert!(
+        calls.load(Ordering::Relaxed) < 10,
+        "cached statistics must not scan 100k rows"
+    );
+    assert_eq!(
+        conn.query_row("SELECT bytes FROM catalog_stats", [], |r| r
+            .get::<_, i64>(0))?,
+        102400000
+    );
+    // Rebuild missing counters, still with existing triggers installed.
+    conn.execute("DELETE FROM catalog_stats", [])?;
+    conn.execute_batch(include_str!("sql/stats.sql"))?;
+    assert_eq!(
+        conn.query_row("SELECT files FROM catalog_stats", [], |r| r
+            .get::<_, i64>(0))?,
+        100000
+    );
+    Ok(())
+}
+
+#[test]
+fn search_unicode_limit_counts_characters() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    for text in ["ž", "🌊", "a"] {
+        assert_eq!(
+            s.search(SearchOptions {
+                query: text.repeat(1000),
+                ..Default::default()
+            })?
+            .total,
+            0
+        );
+        assert!(
+            s.search(SearchOptions {
+                query: text.repeat(1001),
+                ..Default::default()
+            })
+            .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn storage_batch_groups_are_isolated_and_roll_back_together() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let a = s.begin_scan(&ScanOptions {
+        root: "demo://a".into(),
+        label: "Same label".into(),
+        ..Default::default()
+    })?;
+    let b = s.begin_scan(&ScanOptions {
+        root: "demo://b".into(),
+        label: "Same label".into(),
+        ..Default::default()
+    })?;
+    let file = entry("same.txt");
+    let rows = s.upsert_groups(
+        "first",
+        &[
+            (&a.id, std::slice::from_ref(&file)),
+            (&b.id, std::slice::from_ref(&file)),
+        ],
+    )?;
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].id, rows[1].id);
+    assert_eq!(s.metadata(rows[0].id)?.source_id, a.id);
+    assert_eq!(s.metadata(rows[1].id)?.source_id, b.id);
+    s.record_content(
+        rows[0].id,
+        &rows[0].version,
+        "indexed",
+        "original content",
+        "",
+    )?;
+    let mut changed = file.clone();
+    changed.size = 11;
+    let mut overflow = entry("too-big.txt");
+    overflow.size = i64::MAX;
+    assert!(
+        s.upsert_groups("failed", &[(&a.id, &[changed]), (&b.id, &[overflow])])
+            .is_err()
+    );
+    assert_eq!(s.metadata(rows[0].id)?.size, file.size);
+    assert_eq!(s.stats()?["files"], 2);
+    assert_eq!(s.stats()?["bytes"], 40);
+    assert_eq!(s.stats()?["documents"], 1);
+    assert_eq!(s.file(rows[0].id, 0, 100)?["text"], "original content");
+    let (sources, total) = s.sources("", 0, 200)?;
+    assert_eq!(total, 2);
+    assert!(
+        sources
+            .iter()
+            .all(|source| source.file_count == 1 && source.total_size == 20)
+    );
+    assert_eq!(s.sources(&b.id, 0, 1)?.0[0].file_count, 1);
+    assert_eq!(s.sources("", 1, 1)?.0.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn storage_availability_is_derived_without_destroying_saved_status() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let data = temp.path().join("data");
+    fs::create_dir(&data)?;
+    let mut s = Store::open(&data, "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://availability".into(),
+        ..Default::default()
+    })?;
+    let entries = [entry("one.txt"), entry("two.txt")];
+    let files = s.upsert(&source.id, "first", &entries)?;
+    for file in &files {
+        s.record_content(file.id, &file.version, "indexed", "restorable document", "")?;
+    }
+    assert_eq!(s.stats()?["documents"], 2);
+    drop(s);
+    let saved = temp.path().join("saved-content.sqlite");
+    fs::rename(data.join("content.sqlite"), &saved)?;
+    let mut s = Store::open(&data, "")?;
+    let stats = s.stats()?;
+    assert_eq!(stats["documents"], 0);
+    assert_eq!(stats["stored_documents"], 2);
+    assert_eq!(stats["content_available"], false);
+    assert!(!stats["content_error"].as_str().unwrap().is_empty());
+    assert!(
+        s.search(SearchOptions::default())?
+            .results
+            .iter()
+            .all(|f| f.text_status == "not_indexed")
+    );
+    assert_eq!(s.file(files[0].id, 0, 100)?["text_status"], "not_indexed");
+    let stored: i64 = s.conn.query_row(
+        "SELECT count(*) FROM files WHERE text_status='indexed'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(stored, 2);
+    // Missing content has no open handle, so restoring the matching file makes
+    // the saved statuses usable again without rescanning or rewriting them.
+    fs::rename(&saved, data.join("content.sqlite"))?;
+    assert_eq!(s.stats()?["documents"], 2);
+    assert_eq!(s.file(files[0].id, 0, 100)?["text"], "restorable document");
+    drop(s);
+    fs::rename(data.join("content.sqlite"), &saved)?;
+    let mut s = Store::open(&data, "")?;
+    let first = s.upsert(&source.id, "partial", &entries[..1])?.remove(0);
+    assert!(first.needs_text);
+    s.record_content(first.id, &first.version, "indexed", "rebuilt document", "")?;
+    assert_eq!(s.stats()?["documents"], 1);
+    assert_eq!(s.stats()?["stored_documents"], 2);
+    assert_eq!(
+        s.search(SearchOptions {
+            mode: "content".into(),
+            ..Default::default()
+        })?
+        .total,
+        1
+    );
+    s.conn.execute_batch("BEGIN; DELETE FROM content.links;")?;
+    assert_eq!(s.stats()?["documents"], 0);
+    s.conn.execute_batch("ROLLBACK")?;
+    assert_eq!(s.stats()?["documents"], 1);
+    let copied = temp.path().join("copy");
+    s.export(&copied, true, None)?;
+    let copy = Store::open(&copied, "")?;
+    assert_eq!(copy.stats()?["documents"], 1);
+    assert_eq!(copy.stats()?["stored_documents"], 2);
+    Ok(())
+}
+
+#[test]
+fn storage_availability_cancelled_initialization_can_retry() -> anyhow::Result<()> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://availability-cancel".into(),
+        ..Default::default()
+    })?;
+    let entries = (0..4000)
+        .map(|i| entry(&format!("doc-{i}.txt")))
+        .collect::<Vec<_>>();
+    let files = s.upsert(&source.id, "scan", &entries)?;
+    let contents = files
+        .iter()
+        .map(|f| Content {
+            id: f.id,
+            version: &f.version,
+            status: "indexed",
+            text: "same document",
+            detail: "",
+        })
+        .collect::<Vec<_>>();
+    s.record_contents(&contents)?;
+    drop(s);
+    let mut s = Store::open(temp.path(), "")?;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    s.conn.progress_handler(
+        100,
+        Some(move || counter.fetch_add(1, Ordering::Relaxed) >= 30),
+    )?;
+    assert!(s.ensure_content(false).is_err());
+    let attached: i64 = s.conn.query_row(
+        "SELECT count(*) FROM pragma_database_list WHERE name='content'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(attached, 0);
+    let temporary: i64 = s.conn.query_row(
+        "SELECT count(*) FROM temp.sqlite_master WHERE name LIKE 'available_%'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(temporary, 0);
+    assert!(s.ensure_content(false)?);
+    assert_eq!(s.stats()?["documents"], 4000);
+    let ticks = Arc::new(AtomicUsize::new(0));
+    let counter = ticks.clone();
+    s.conn.progress_handler(
+        1000,
+        Some(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+            false
+        }),
+    )?;
+    for _ in 0..100 {
+        assert_eq!(s.stats()?["documents"], 4000);
+    }
+    s.conn.progress_handler(0, None::<fn() -> bool>)?;
+    assert!(
+        ticks.load(Ordering::Relaxed) < 20,
+        "status polls must use the derived O(1) count"
+    );
+    Ok(())
+}
+
+#[test]
+fn storage_search_whitespace_dedup_and_fts_snippets() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://fts-normalization".into(),
+        ..Default::default()
+    })?;
+    let files = s.upsert(
+        &source.id,
+        "scan",
+        &[
+            entry("alpha.txt"),
+            entry("punctuation.txt"),
+            entry("combining.txt"),
+            entry("long-token.txt"),
+        ],
+    )?;
+    let texts = [
+        "alpha intermediate beta".to_owned(),
+        format!("{}north west end", "intro ".repeat(15000)),
+        format!("{}re\u{301}sume\u{301} end", " ".repeat(65533)),
+        format!("{} longtailneedle end", "x".repeat(2_000_123)),
+    ];
+    for (file, text) in files.iter().zip(&texts) {
+        s.record_content(file.id, &file.version, "indexed", text, "")?;
+    }
+    for separator in [" ", "\t", "\n", "\r", "\u{a0}", "\u{2003}"] {
+        assert_eq!(
+            s.search(SearchOptions {
+                query: format!("alpha{separator}beta"),
+                mode: "content".into(),
+                ..Default::default()
+            })?
+            .total,
+            1
+        );
+        assert_eq!(
+            s.search(SearchOptions {
+                query: format!("\"alpha{separator}beta\""),
+                mode: "content".into(),
+                ..Default::default()
+            })?
+            .total,
+            0
+        );
+    }
+    for mode in ["files", "content", "all"] {
+        assert_eq!(
+            s.search(SearchOptions {
+                query: "alpha ".repeat(160),
+                mode: mode.into(),
+                ..Default::default()
+            })?
+            .total,
+            1
+        );
+    }
+    for (query, expected) in [
+        ("north-west", "north west"),
+        ("resume", "re\u{301}sume\u{301}"),
+        ("longtailneedle", "longtailneedle"),
+    ] {
+        let found = s.search(SearchOptions {
+            query: query.into(),
+            mode: "content".into(),
+            ..Default::default()
+        })?;
+        assert_eq!(found.total, 1);
+        assert!(
+            found.results[0].snippet.contains(expected),
+            "{}",
+            found.results[0].snippet
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn storage_rust_text_work_is_cancellable_and_name_only_preview_is_bounded() -> anyhow::Result<()> {
+    use std::cell::Cell;
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://cancel-text".into(),
+        ..Default::default()
+    })?;
+    let file = s
+        .upsert(&source.id, "scan", &[entry("filenameonly.txt")])?
+        .remove(0);
+    let text = format!("{}tailneedle", "intro ".repeat(400_000));
+    s.record_content(file.id, &file.version, "indexed", &text, "")?;
+    let calls = Cell::new(0);
+    let cancelled = || {
+        calls.set(calls.get() + 1);
+        calls.get() > 20
+    };
+    assert!(
+        s.search_with_cancel(
+            SearchOptions {
+                query: "tailneedle".into(),
+                mode: "content".into(),
+                ..Default::default()
+            },
+            &cancelled
+        )
+        .is_err()
+    );
+    calls.set(0);
+    let preview = s.search_with_cancel(
+        SearchOptions {
+            query: "filenameonly".into(),
+            mode: "all".into(),
+            ..Default::default()
+        },
+        &cancelled,
+    )?;
+    assert_eq!(preview.total, 1);
+    assert!(preview.results[0].snippet.starts_with("intro"));
+    assert!(calls.get() <= 20);
+    calls.set(0);
+    assert!(
+        s.file_with_cancel(file.id, 2_000_000, 100, &cancelled)
+            .is_err()
+    );
+    assert_eq!(s.file(file.id, 0, 5)?["text"], "intro");
+    Ok(())
+}
+
+#[test]
+fn storage_ascii_snippets_preserve_unicode61_boundaries() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://ascii-snippets".into(),
+        ..Default::default()
+    })?;
+    let cases = [
+        (
+            "uppercase",
+            format!("{}MiXeDcAsE final", "intro ".repeat(15000)),
+            "mixedcase",
+            "MiXeDcAsE",
+        ),
+        (
+            "substring",
+            format!(
+                "{}target needle marker",
+                "needleprefix suffixneedle ".repeat(5000)
+            ),
+            "needle",
+            "target needle marker",
+        ),
+        (
+            "punctuation",
+            format!("{}before_ascii_marker", "intro ".repeat(15000)),
+            "ascii-marker",
+            "before_ascii_marker",
+        ),
+        (
+            "boundary",
+            format!("{}boundaryneedle end", " ".repeat(65530)),
+            "boundaryneedle",
+            "boundaryneedle",
+        ),
+        (
+            "digits",
+            format!("{}needle42 final", "needle42x xneedle42 ".repeat(5000)),
+            "needle42",
+            "needle42 final",
+        ),
+    ];
+    for (name, text, query, expected) in cases {
+        let file = s
+            .upsert(&source.id, "scan", &[entry(&format!("{name}.txt"))])?
+            .remove(0);
+        s.record_content(file.id, &file.version, "indexed", &text, "")?;
+        let result = s.search(SearchOptions {
+            query: query.into(),
+            mode: "content".into(),
+            ..Default::default()
+        })?;
+        assert_eq!(result.total, 1, "{name}");
+        assert!(
+            result.results[0].snippet.contains(expected),
+            "{name}: {}",
+            result.results[0].snippet
+        );
     }
     Ok(())
 }

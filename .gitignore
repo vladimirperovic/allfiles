@@ -21,6 +21,10 @@ encryption.json
 dist/
 preview/
 .tmp/
+# Local verification evidence can contain machine paths and screenshots.
+/audit/
+/output/
+/tmp/
 .cache/
 .venv/
 __pycache__/

@@ -84,6 +84,8 @@
     'Katalog {catalog} · Sadržaj {content}': 'Catalog {catalog} · Content {content}', 'Baza {size}': 'Database {size}',
     'Ukupna veličina baze. {details}': 'Total database size. {details}', 'AllFiles {version} · lokalno': 'AllFiles {version} · local',
     'Katalog je šifrovan.': 'The catalog is encrypted.', 'Otključan u ovoj sesiji.': 'Unlocked in this session.',
+    'Tekst dokumenata nije u potpunosti dostupan. Pretraga naziva i putanja radi. Vratite odgovarajuću bazu sadržaja ili ponovite indeksiranje medija.': 'Some document text is unavailable. Filename and path search still works. Restore the matching content database or index the media again.',
+    'Dostupno je {available} od {expected} indeksiranih dokumenata.': '{available} of {expected} indexed documents are available.',
     'Katalog je osvežen. Novi fajlovi su spremni za pretragu.': 'Catalog refreshed. New files are ready to search.',
     'Indeksiranje nije završeno.': 'Indexing did not finish.',
     'Indeksiranje je zaustavljeno. Sačuvani podaci ostaju u katalogu.': 'Indexing stopped. Saved data remains in the catalog.',

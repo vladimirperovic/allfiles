@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "allfiles"
-version = "0.3.0"
+version = "0.1.5"
 dependencies = [
  "adiantum",
  "aes 0.9.3",

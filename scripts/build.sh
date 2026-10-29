@@ -13,7 +13,11 @@ case "$target" in
   *) printf 'Unsupported target: %s\n' "$target" >&2; exit 1 ;;
 esac
 cargo build --release --locked --target "$target"
+target_dir=$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
 mkdir -p dist
-cp "${CARGO_TARGET_DIR:-target}/$target/release/allfiles$extension" "dist/$name"
-cp README.md README.en.md THIRD_PARTY_NOTICES.txt dist/
+cp "$target_dir/$target/release/allfiles$extension" "dist/$name"
+cp README.md README.en.md LICENSE CHANGELOG.md CONTRIBUTING.md SECURITY.md THIRD_PARTY_NOTICES.txt VERSION dist/
+cp -R docs dist/
+platform=${name#allfiles-}
+python3 scripts/package-release.py --binary "dist/$name" --platform "${platform%.exe}" --output dist
 printf 'Built dist/%s. Catalogs are not included.\n' "$name"

@@ -2,9 +2,11 @@
 
 Srpski · [English](README.en.md)
 
+**Javno izdanje 0.1.5** · [Preuzimanje](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) · [Demo u browseru](https://vladimirperovic.github.io/allfiles/) · [Dokumentacija](docs/README.md) · [Izmene](CHANGELOG.md) · [MIT licenca](LICENSE)
+
 Prenosivi katalog svih tvojih fajlova: računari, eksterni diskovi, Blu-ray diskovi i LTO kasete. Jedan program otvara lokalni web interfejs, sa gradijentima, providnim panelima i čitljivim tabelama. Katalog možeš pretraživati i kada izvorni disk nije priključen.
 
-AllFiles je namenjen prvenstveno lokalnom radu na Omarchy Linuxu, sa bazama unutar otključanog VeraCrypt kontejnera. Postoje i Windows i macOS verzije. Nema pretplate, obaveznog udaljenog servera ni ugrađenog AI modela. Sam program ne šalje dokumente u cloud. Za korišćenje gotovog programa ne instaliraš Rust, Go, Node, Python ni poseban SQLite server.
+AllFiles je namenjen lokalnom radu, uključujući Omarchy Linux sa bazama unutar otključanog VeraCrypt kontejnera. Projekat podržava izgradnju za Linux, Windows i macOS; dostupne pakete i proverene platforme pogledaj uz konkretno izdanje. Nema pretplate, obaveznog udaljenog servera ni ugrađenog AI modela. Sam program ne šalje dokumente u cloud. Za korišćenje gotovog programa ne instaliraš Rust, Go, Node, Python ni poseban SQLite server.
 
 ## Kako radi
 
@@ -15,13 +17,25 @@ data/
   content.sqlite             ← izdvojeni tekst i indeks sadržaja
 ```
 
+Ako baza sadržaja nedostaje ili ne odgovara katalogu, nazivi i putanje ostaju dostupni. Broj indeksiranih dokumenata prikazuje dostupan sadržaj, a aplikacija objašnjava nepotpunu kopiju. Vrati odgovarajuću bazu sadržaja dok je servis zatvoren ili ponovo indeksiraj dostupne originale; otvaranje nepotpune kopije ne briše ranije metapodatke.
+
 Pretraga naziva i putanja koristi katalog. Pretraga sadržaja koristi drugu bazu. Razdvajanje omogućava da prenosiš samo manji katalog; samo po sebi ne garantuje bržu pretragu. Veličina zavisi od broja i naziva fajlova, količine izdvojenog teksta i indeksa.
 
 Program sluša isključivo na `127.0.0.1`. Browser koristi lokalni servis; ovo nije aplikacija koja se pokreće dvoklikom na samostalni `index.html`. Podaci se pretražuju iz baze i ne učitavaju svi odjednom u browser.
 
 ## Pokretanje na Omarchyju
 
-Gotovi programi su na [GitHub Releases](https://github.com/vladimirperovic/allfiles/releases). Preuzmi arhivu za svoj sistem i raspakuj je u kontejner. Za Omarchy na Intel/AMD računaru koristi `linux-amd64`.
+Paketi javnog izdanja objavljuju se na stranici [v0.1.5](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5). Preuzmi dostupnu arhivu za svoj sistem, proveri njen SHA-256 prema priloženim kontrolnim sumama i raspakuj je u kontejner. Za Omarchy na Intel/AMD računaru koristi `linux-amd64`. Ne preuzimaj stariji paket samo zato što ima veći broj verzije: istorijske oznake 0.2.0 i 0.3.0 nisu promenjene ovim javnim izdanjem.
+
+| Sistem | Arhiva izdanja 0.1.5 |
+|---|---|
+| Windows Intel/AMD 64-bit | `allfiles-0.1.5-windows-amd64.zip` |
+| Linux Intel/AMD 64-bit | `allfiles-0.1.5-linux-amd64.tar.gz` |
+| Linux ARM64 | `allfiles-0.1.5-linux-arm64.tar.gz` |
+| macOS Apple Silicon | `allfiles-0.1.5-darwin-arm64.tar.gz` |
+| macOS Intel | `allfiles-0.1.5-darwin-amd64.tar.gz` |
+
+Linux paketi iz nativne CI izgradnje ciljaju Ubuntu 24.04 i glibc 2.39 ili noviji. Za stariji sistem može biti potrebna sopstvena izgradnja. Preuzmi i `SHA256SUMS.txt`; proveri punu kontrolnu sumu arhive pre raspakivanja. Paketi nisu digitalno potpisani. Dostupnost i rezultate provera potvrdi na stranici izdanja.
 
 1. Otključaj VeraCrypt kontejner.
 2. Kopiraj odgovarajući program u kontejner i otvori terminal u tom folderu.
@@ -79,11 +93,11 @@ Bez `--content` skeniranje prikuplja samo metapodatke. Sa `--content` pokušava 
 | PDF sa tekstualnim slojem | Tekst koji PDF čitač može izdvojiti |
 | DOCX, XLSX, PPTX | Tekst iz savremenih Office XML formata |
 | ODT, ODS, ODP | Tekst iz OpenDocument formata |
-| TXT i podržani obični tekstualni fajlovi | Tekstualni sadržaj |
+| TXT, MD, CSV, TSV, LOG, JSON, XML, HTML/HTM | Tekstualni sadržaj; HTML se čita kao tekst, bez izvršavanja |
 | Skenirani PDF bez tekstualnog sloja | Samo metapodaci; OCR nije uključen |
 | Stari DOC, XLS, PPT formati | Samo metapodaci u ovoj verziji |
 
-Izdvajanje teksta nije prikaz kompletnog dokumenta: raspored, formatiranje, slike i tekst u ugrađenim objektima mogu izostati. Zaštićeni, oštećeni ili nepodržani dokumenti ostaju u katalogu i kada njihov sadržaj nije indeksiran. Obrada je ograničena na 256 MiB po ulaznom dokumentu i do 8 MiB izdvojenog teksta; Office XML ima dodatne granice za raspakovanu veličinu. Status fajla pokazuje kada je tekst samo delimično indeksiran. Skeniranje ne prati simboličke linkove i preskače sopstveni direktorijum podataka.
+Izdvajanje teksta nije prikaz kompletnog dokumenta: raspored, formatiranje, slike i tekst u ugrađenim objektima mogu izostati. Zaštićeni, oštećeni ili nepodržani dokumenti ostaju u katalogu i kada njihov sadržaj nije indeksiran. Obrada je ograničena na 256 MiB po ulaznom dokumentu i do 8 MiB izdvojenog UTF-8 teksta; Office XML na 32 MiB po delu i 64 MiB ukupno, a PDF na najviše 20.000 stranica. Status fajla pokazuje kada je tekst samo delimično indeksiran. Ovo nisu stroge granice memorije i vremena PDF parsera. Skeniranje ne prati simboličke linkove i preskače sopstveni direktorijum podataka.
 
 ## WinCatalog i postojeći katalozi
 
@@ -98,6 +112,8 @@ WinCatalog izvoz možeš dodati kasnije. Za početak koristi CSV izvoz; uvoznik 
 ```
 
 **Uvoz konkretnog WinCatalog kataloga još treba proveriti na tvom izvozu.** Verzije programa i strukture izvoza se razlikuju. Uvoz nije obećanje podrške za svaki CSV/XML ili direktno za WinCatalog radni fajl. Ako izvoz ne sadrži izdvojeni tekst dokumenata, uvoz ne može napraviti pretragu njihovog sadržaja bez pristupa originalima. Sačuvaj originalni katalog.
+
+U hijerarhijskom XML-u naziv/putanja foldera i podaci o mediju mogu biti atributi ili elementi koji prethode fajlovima. Zakasneli podaci koji bi promenili već protumačene putanje ili medije odbijaju se tokom provere pre upisa. UNC putanje i serijski brojevi medija ostaju sačuvani.
 
 Uvoz ograničava ukupan izvoz na 2 GiB, CSV zaglavlje na 64 KiB, zapis/XML token na 4 MiB i broj kolona/polja na 256. U memoriji čeka najviše 4.096 zapisa ukupno, i kada izvoz sadrži mnogo medija. Birač foldera prikazuje do 2.000 podfoldera uz poruku ako ih ima još; tada možeš uneti punu putanju ručno.
 
@@ -193,7 +209,7 @@ Primeri zahteva koje zatim možeš napisati u razgovoru:
 - „Pronađi fajlove čiji naziv ili putanja sadrže kuhinja.”
 - „Pretraži sadržaj dokumenata za frazu ‘ugovor o zakupu’ i pokaži na kojim diskovima su rezultati.”
 - „Ponovo skeniraj priključeni SSD-KUCA-01 i indeksiraj sadržaj dokumenata.”
-- „Dodaj folder `/home/vlad/Documents` kao Kućni dokumenti i prati napredak skeniranja.”
+- „Dodaj folder `/home/user/Documents` kao Kućni dokumenti i prati napredak skeniranja.”
 - „Prikaži detalje tog fajla i dostupni izdvojeni tekst.”
 
 Skeniranje zahteva da je izvorni folder dostupan računaru na kome radi servis. Pretraga postojećeg kataloga radi i bez originalnog medija. Tekst vraćen kroz MCP je ograničen po zahtevu, a duga skeniranja imaju zaseban status i mogućnost otkazivanja.
@@ -235,9 +251,13 @@ chromium --user-data-dir="$PWD/data/browser-profile" http://127.0.0.1:8765
 
 Zameni `chromium` imenom Chromium browsera koji koristiš. Poseban profil umanjuje tragove van kontejnera, ali ne predstavlja garanciju da operativni sistem ili drugi programi ništa neće zapisati. Nemoj uključivati sinhronizaciju tog profila sa online nalogom ako želiš da ostane lokalni.
 
-Lokalni servis nije zamišljen za javno objavljivanje. Ne prosleđuj njegov port na internet. Stalno dostupna online verzija bila bi zaseban režim sa autentifikacijom, HTTPS-om i otključanim podacima na serveru; nije uključena u ovu verziju.
+Lokalni servis nije zamišljen za javno objavljivanje niti predstavlja granicu zaštite od drugih procesa na istom računaru. Ne prosleđuj njegov port na internet. Stalno dostupna online verzija bila bi zaseban režim sa autentifikacijom, HTTPS-om i otključanim podacima na serveru; nije uključena u ovu verziju. Granice zaštite i prijavljivanje bezbednosnih problema opisani su u [SECURITY.md](SECURITY.md).
 
 ## Demo bez tvojih podataka
+
+Otvori [javni demo](https://vladimirperovic.github.io/allfiles/) direktno u browseru. Odmah se prikazuje kontrolna tabla sa **1 LTO kasetom, 3 Blu-ray medija i 3 diska** (jedan računar i dva eksterna diska). Svi nazivi, putanje i dokumenti su izmišljeni. Demo radi samo u browseru: nema lokalni servis, pristup tvojim diskovima, pravo indeksiranje niti otključavanje kataloga. Objavljivanje ove stranice ne objavljuje tvoj lokalni katalog.
+
+Lokalni demo punog programa je zasebna mogućnost:
 
 Za pregled izgleda napravi odvojen prazan direktorijum. Demo koristi izmišljene nazive i medije:
 
@@ -249,15 +269,17 @@ mkdir -p demo-data
 
 Nemoj koristiti demo direktorijum kao svoj pravi katalog. `demo` dodaje sintetičke podatke i završava se; druga komanda otvara preglednik.
 
-## Rust izdanje 0.3.0 i nadogradnja
+## Javno izdanje 0.1.5 i nadogradnja
 
-Produkcioni program je sada napisan u **Rustu**, sa nativnim **SQLite 3.54.1 + FTS5**. Skeniranje, PDF/Office tekst, CSV/XML/EFU uvoz, lokalni HTTP server, MCP, izvoz i Adiantum šifrovanje rade u istom izvršnom fajlu. Web interfejs i format dve baze ostaju isti. Go izvornici su zadržani kao rezervna referenca; podrazumevani build i CI koriste Cargo.
+Produkcioni program je napisan u **Rustu**, sa nativnim **SQLite 3.54.1 + FTS5**. Skeniranje, PDF/Office tekst, CSV/XML/EFU uvoz, lokalni HTTP server, MCP, izvoz i Adiantum šifrovanje rade u istom izvršnom fajlu. Go izvornici ostaju kao referentna implementacija i za provere kompatibilnosti; produkcioni build koristi Cargo. Pregled modula je u [arhitekturi](docs/ARCHITECTURE.md).
 
-Zatvori staru aplikaciju, napravi rezervnu kopiju celog direktorijuma podataka i pokreni novi program sa istim `--data`. Nije potreban novi uvoz ili indeksiranje. Šifrovani katalozi zadržavaju postojeću lozinku i manifest v1. Kompatibilnost je proverena čitanjem i dopunjavanjem kataloga u oba smera između Go 0.2.0 i Rust 0.3.0. Stari program i izvor ostaju dostupni kroz Git tag `v0.2.0`.
+**0.1.5 je oznaka ovog javnog izdanja trenutne Rust aplikacije.** Ranije oznake i izdanja 0.2.0/0.3.0 ostaju nepromenjeni; manji broj ovde ne označava povratak na stariji Go kod. [Changelog](CHANGELOG.md) opisuje sadržaj javnog izdanja.
 
-Lokalno su provereni Windows x86-64 program, browser na četiri širine, oba jezika, MCP i šifrovani izvoz. Linux x86-64 i ARM64 musl programi mogu se izgraditi statički; cross-build nije dokaz pokretanja na tim uređajima. CI je podešen za pet nativnih platformi, uključujući oba Mac procesora. Dostupne i stvarno proverene pakete pogledaj u napomenama konkretnog izdanja.
+Zatvori staru aplikaciju, napravi rezervnu kopiju celog direktorijuma podataka i pokreni novi program sa istim `--data`. Format kataloga i manifest šifrovanja v1 ostaju kompatibilni; nije potreban novi uvoz samo zbog promene izvršnog fajla. Za ispravljen ili ranije nepotpun izdvojeni tekst ponovo skeniraj dostupne originale sa uključenim sadržajem. Istorijska provera čitanja i dopunjavanja šifrovanih kataloga u oba smera između Go 0.2.0 i Rust 0.3.0 ostaje dokumentovana; aktuelni rezultati su u [proverama izdanja](docs/VALIDATION.md).
 
-### Mjerenje kompletne Rust aplikacije
+Lokalno je proveren Windows x86-64 program, uključujući browser, oba jezika, MCP i šifrovani izvoz. GitHub Actions definiše matricu Linux amd64/arm64, macOS amd64/arm64 i Windows amd64; definicija workflow-a nije dokaz da su svi poslovi uspešno izvršeni. Cross-build takođe nije dokaz rada na ciljnom uređaju. Objavljene pakete i stvarni status provera pogledaj u [napomenama izdanja](docs/PUBLIC_RELEASE.md) i uz preuzimanje.
+
+### Istorijsko merenje kompletne Rust aplikacije (26. oktobar 2026)
 
 Na istom Windows računaru, nad istim nešifrovanim sintetičkim katalogom od **100.050 fajlova**, dva uzastopna kruga sa obrnutim redosledom programa, 3 zagrevanja i 15 merenja po upitu. Prikazan je prosek medijana dva kruga. Meri se ceo HTTP odgovor preko trajne lokalne konekcije, uključujući metapodatke i tekstualne isečke; bez browsera i indeksiranja.
 
@@ -273,9 +295,9 @@ Na istom Windows računaru, nad istim nešifrovanim sintetičkim katalogom od **
 
 Windows izvršni fajl: **14,24 MiB → 6,18 MiB** (oko 57% manji). Katalog ostaje u istom formatu; promena jezika sama ne smanjuje bazu. Ovo poređenje obuhvata i promenu SQLite motora/verzije (Go 3.53.4, Rust nativni 3.54.1), pa nije izolovan efekat jezika. Na sadržajnom testu 50 fajlova deli jedan tekst od oko 1 MiB; to ne predstavlja veliku zbirku različitih dokumenata. Ne meri hladan disk, šifrovanje, RAM ni bateriju.
 
-[Sirovi rezultati](experiments/results/2026-10-26-rust-app-windows.json) sadrže sve uzorke. `scripts/compare-http.py` proverava ukupan broj i redosled ID-jeva svakog odgovora i ne menja izvorne probne baze.
+[Sirovi rezultati](https://github.com/vladimirperovic/allfiles/blob/main/experiments/results/2026-10-26-rust-app-windows.json) sadrže sve uzorke. `scripts/compare-http.py` proverava ukupan broj i redosled ID-jeva svakog odgovora i ne menja izvorne probne baze.
 
-### Optimizacija pretrage i indeksiranja (posle 0.3.0)
+### Istorijsko merenje optimizacija Rust 0.3.0 (26. oktobar 2026)
 
 Isti računar, katalog i postupak kao u prethodnoj tabeli: dva kruga sa obrnutim redosledom programa, 3 zagrevanja, 15 merenja po upitu i prosek medijana oba kruga. Poredi se Rust 0.3.0 pre i posle ovih izmena. Svaki odgovor ima isti ukupan broj i isti redosled ID-jeva kao pre izmena.
 
@@ -306,7 +328,7 @@ Upis se meri kao vreme celog CLI procesa na istom računaru: dva kruga sa obrnut
 - **Keš baze.** SQLite drži do 64 MiB stranica po bazi, umesto oko 2 MiB. Ponovljene pretrage ređe čitaju fajl, a kod šifrovanog kataloga ređe dešifruju. Memorija se zauzima samo za stranice koje su zaista pročitane.
 - **Isečci.** Isečak traži pojam bez razlike u velikim slovima i kvačicama, kao i pretraga: upit „kuca” sada prikazuje deo oko reči „Kuća”, a ne početak dokumenta. Dokument se raspakuje samo dok isečak nije potpun. Kod više pojmova isečak počinje kod pojma koji se u tekstu javlja prvi.
 
-Redak naziv je oko 0,03 ms sporiji zbog provere pojma. Merenje koristi zagrejan keš i nešifrovan katalog. Ne meri hladan disk, šifrovanje, raznovrsne velike dokumente, izdvajanje PDF/Office teksta ni RAM. Vreme upisa najviše zavisi od diska, pa kontejner ili USB disk mogu dati drugačiji odnos. [Sirovi rezultati](experiments/results/2026-10-26-rust-optimizations-windows.json) sadrže sve uzorke; ponavljaju se sa `scripts/compare-http.py` i `scripts/compare-writes.py`.
+Redak naziv je oko 0,03 ms sporiji zbog provere pojma. Merenje koristi zagrejan keš i nešifrovan katalog. Ne meri hladan disk, šifrovanje, raznovrsne velike dokumente, izdvajanje PDF/Office teksta ni RAM. Vreme upisa najviše zavisi od diska, pa kontejner ili USB disk mogu dati drugačiji odnos. [Sirovi rezultati](https://github.com/vladimirperovic/allfiles/blob/main/experiments/results/2026-10-26-rust-optimizations-windows.json) sadrže sve uzorke; ponavljaju se sa `scripts/compare-http.py` i `scripts/compare-writes.py`.
 
 ## Razvoj i build
 
@@ -322,7 +344,7 @@ python scripts/smoke.py target/release/allfiles
 
 Na Windowsu poslednja putanja završava se sa `.exe`. Python je potreban samo za integracionu proveru, ne za aplikaciju. `cargo build` ugrađuje resurse iz `web/`; posle izmene interfejsa ponovo izgradi program.
 
-`sh scripts/build.sh` ili `.\scripts\build.ps1` pakuje program za tekuću platformu u `dist/`. Za drugi Rust target prosledi ga kao prvi argument, odnosno `-Target`; prethodno instaliraj njegov standardni runtime i odgovarajući C linker. Ovo više nije Go cross-build bez C alata. Verzija dolazi iz `Cargo.toml`.
+`sh scripts/build.sh` ili `.\scripts\build.ps1` gradi i kopira program i dokumentaciju za tekuću platformu u `dist/`. Za drugi Rust target prosledi ga kao prvi argument, odnosno `-Target`; prethodno instaliraj njegov standardni runtime i odgovarajući C linker. Ovo više nije Go cross-build bez C alata. Verzija programa dolazi iz `Cargo.toml`; pri izdanju mora odgovarati fajlu `VERSION`. Za ZIP/tar.gz arhive i kontrolne sume koriste se Python 3 skripte opisane u [postupku pakovanja](docs/PUBLIC_RELEASE.md#package-a-tested-build).
 
 | Fajl | Platforma |
 |---|---|
@@ -332,9 +354,9 @@ Na Windowsu poslednja putanja završava se sa `.exe`. Python je potreban samo za
 | `allfiles-darwin-amd64` | macOS Intel |
 | `allfiles-windows-amd64.exe` | Windows Intel/AMD |
 
-GitHub Actions definicija testira i gradi svaku platformu na njenom nativnom runner-u. Čuvanje arhiva je opciono kroz `upload_artifacts`, podrazumevano isključeno; objavljivanje izdanja nije automatsko. GitHub kvota i billing naloga mogu sprečiti izvršavanje čak i kada je čuvanje artifact-a isključeno. Katalozi, lozinke, lokalni izvozi i browser profili ne ulaze u Git niti u distributivne arhive.
+GitHub Actions definiše testiranje i izgradnju na nativnim runner-ima; uspeh proveri u konkretnom pokretanju. Pakovanje i objavljivanje opisani su u [dokumentaciji izdanja](docs/PUBLIC_RELEASE.md). Katalozi, lozinke, lokalni izvozi i browser profili ne ulaze u Git niti u distributivne arhive. [CONTRIBUTING.md](CONTRIBUTING.md) opisuje razvoj, testove i bezbedne primere za prijavu problema.
 
-## Analiza performansi i preostala poboljšanja
+## Istorijska analiza performansi i preostala poboljšanja
 
 Pregled i optimizacija u **0.2.0** uklonili su ponovno sabiranje svih fajlova pri osvežavanju statusa, ponovljeno raspakivanje istog dokumenta po rezultatu i korelisani podupit koji je pretragu sadržaja ponavljao za svaki fajl. Brojači se menjaju u istoj transakciji kao podaci; postojeći katalozi se sabiraju jednom pri prvoj nadogradnji. Preview i MCP sada prenose samo traženi deo teksta. Uvoz metapodataka ne pravi poseban dodatni upis za svaki PDF/Office fajl.
 
@@ -353,9 +375,9 @@ Poslednji red meri zaseban CSV izvoz, ne čitanje teksta iz 10.000 PDF dokumenat
 
 Preostala poboljšanja: paginacija kursorom za veoma duboke stranice, čitanje koje ne čeka transakciju indeksiranja (sada jedna brava redom propušta zahteve), zaseban radni proces sa granicom vremena/memorije za nepouzdane PDF-ove i izvoz sa napretkom/otkazivanjem. PDF biblioteka može obraditi celu jednu stranicu pre provere našeg limita, pa granice ulaza/izdvojenog teksta nisu stroga izolacija parsera. Osnovna aplikacija je i dalje namenjena lokalnom radu; objava na javnom serveru zahteva posebno rešenu autentifikaciju i HTTPS.
 
-Istorijski izolovani eksperimenti za poređenje istih SQL upita u [Go-u](experiments/go-search/README.md) i [Rustu](experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
+Istorijski izolovani eksperimenti za poređenje istih SQL upita u [Go-u](https://github.com/vladimirperovic/allfiles/blob/main/experiments/go-search/README.md) i [Rustu](https://github.com/vladimirperovic/allfiles/blob/main/experiments/rust-search/README.md) nisu kompletna zamena aplikacije. Koriste sintetičke, nešifrovane podatke; ne ulaze u produkcioni izvršni fajl. Workflow **Compare Go and Rust search** proverava iste brojeve rezultata i redosled ID-jeva pre nego što poredi vremena.
 
-[Izmerena tabela Go / nativni Go / Rust i preporuke](experiments/README.md) pokazuju da je najveći deo poboljšanja širokih SQL upita u tom eksperimentu došao od nativnog SQLite motora. Sirovi rezultati oba kruga uključeni su u repozitorijum; brzina kompletne aplikacije i šifrovanje nisu obuhvaćeni tim merenjem.
+[Izmerena tabela Go / nativni Go / Rust i preporuke](https://github.com/vladimirperovic/allfiles/blob/main/experiments/README.md) pokazuju da je najveći deo poboljšanja širokih SQL upita u tom eksperimentu došao od nativnog SQLite motora. Sirovi rezultati oba kruga uključeni su u repozitorijum; brzina kompletne aplikacije i šifrovanje nisu obuhvaćeni tim merenjem.
 
 Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 sintetičkih fajlova u oko 7.000 foldera zauzelo je **34,96 MiB** u nešifrovanom katalogu metapodataka, bez teksta dokumenata. Uvoz je trajao **10,45 s**, a dva selektivna upita po nazivu i putanji prosečno **2,0–2,1 ms** u 30 ponavljanja sa zagrejanim kešom. To je provera implementacije, ne procena tvoje arhive: kratki ili česti pojmovi, duge putanje, drugi diskovi, šifrovanje i sadržaj dokumenata daju drugačije rezultate. Ponovljivo merenje iz Git taga `v0.2.0`: `go test -v -run '^$' -bench BenchmarkCatalog100K -benchtime 30x -count 1`.
 
@@ -365,3 +387,9 @@ Ranije probno merenje verzije **0.1.0** na Windowsu, Intel i7-14700KF: 100.000 s
 - OCR, automatsko otkrivanje duplikata po sadržaju, direktno upravljanje LTO kasetama i automatska sinhronizacija između računara nisu uključeni.
 - Gotovi buildovi nisu digitalno potpisani. Uspešan build za drugu arhitekturu nije zamena za proveru na tom uređaju.
 - SQLite baza sadržaja sadrži privatne informacije iz dokumenata, čak i kada originalni dokument nije uz nju. Zaštiti je isto kao originale.
+
+## Licenca i prijava problema
+
+AllFiles je dostupan pod [MIT licencom](LICENSE), © 2026 Vladimir Perović. Zavisnosti zadržavaju sopstvene licence navedene u [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+Za funkcionalne greške koristi [GitHub Issues](https://github.com/vladimirperovic/allfiles/issues) sa verzijom, operativnim sistemom i malim sintetičkim primerom. Ne objavljuj kataloge, privatne dokumente, pune lične putanje, lozinke, tokene ni `encryption.json`. Bezbednosne propuste prijavi prema [SECURITY.md](SECURITY.md).

@@ -7,7 +7,7 @@ use crate::{
 use anyhow::{Result, bail};
 use axum::{
     Router,
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::{Request, State},
     http::{StatusCode, header},
     response::{IntoResponse, Response},
@@ -18,12 +18,14 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard, TryLockError,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
+
+const MAX_QUERY_REQUESTS: usize = 16;
 
 #[derive(Default)]
 struct Jobs {
@@ -31,33 +33,98 @@ struct Jobs {
     cancel: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     stopping: bool,
+    exporting: bool,
+    revision: u64,
 }
 pub struct App {
     pub store: SharedStore,
     base: String,
     token: String,
+    instance_id: String,
+    stats_cache: Mutex<Value>,
+    query_slots: Arc<tokio::sync::Semaphore>,
     jobs: Mutex<Jobs>,
     stop_lock: Mutex<()>,
     shutdown: tokio::sync::Notify,
 }
 impl App {
-    fn new(store: SharedStore, base: String) -> Arc<Self> {
-        Arc::new(Self {
+    fn new(store: SharedStore, base: String) -> Result<Arc<Self>> {
+        let stats = store.lock().unwrap().stats()?;
+        Ok(Arc::new(Self {
             store,
             base,
             token: crypto::random_id(),
+            instance_id: crypto::random_id(),
+            stats_cache: Mutex::new(stats),
+            query_slots: Arc::new(tokio::sync::Semaphore::new(MAX_QUERY_REQUESTS)),
             jobs: Mutex::new(Jobs::default()),
             stop_lock: Mutex::new(()),
             shutdown: tokio::sync::Notify::new(),
-        })
+        }))
+    }
+    fn refresh_stats(&self) -> Result<()> {
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Store is unavailable"))?;
+        let stats = store.stats()?;
+        *self.stats_cache.lock().unwrap() = stats;
+        Ok(())
+    }
+    fn refresh_status_cache(&self) -> Result<bool> {
+        // A long query/export must not hide job progress or cancellation. The
+        // counters are a recent snapshot while the store is busy, refreshed
+        // before a job reports completion and whenever an idle poll can read.
+        match self.store.try_lock() {
+            Ok(store) => {
+                let stats = store.stats()?;
+                *self.stats_cache.lock().unwrap() = stats;
+                Ok(false)
+            }
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Poisoned(_)) => bail!("Store is unavailable"),
+        }
+    }
+    fn status_snapshot(&self, cached: bool) -> Result<Value> {
+        let jobs = self.jobs.lock().unwrap();
+        // A worker can finish after refresh_status_cache releases the store.
+        // Its counters are published before its terminal job revision, so read
+        // the latest cache only after taking the job snapshot lock.
+        let mut stats = self.stats_cache.lock().unwrap().clone();
+        stats["job"] = serde_json::to_value(&jobs.progress)?;
+        stats["job_revision"] = jobs.revision.into();
+        stats["instance_id"] = self.instance_id.clone().into();
+        stats["stats_cached"] = cached.into();
+        stats["exporting"] = jobs.exporting.into();
+        Ok(stats)
+    }
+    fn status(&self) -> Result<Value> {
+        self.status_snapshot(self.refresh_status_cache()?)
+    }
+    fn reserve_export(self: &Arc<Self>) -> Result<ExportReservation> {
+        let mut jobs = self.jobs.lock().unwrap();
+        if jobs.stopping
+            || jobs.exporting
+            || jobs
+                .progress
+                .as_ref()
+                .is_some_and(|p| p.status == "running")
+        {
+            bail!("Sačekajte da se indeksiranje ili izvoz završi pre izvoza");
+        }
+        jobs.exporting = true;
+        Ok(ExportReservation(self.clone()))
     }
     fn start(
         self: &Arc<Self>,
         work: impl FnOnce(&SharedStore, &AtomicBool, &dyn Fn(Progress)) -> Result<()> + Send + 'static,
-    ) -> Result<Progress> {
+    ) -> Result<(Progress, u64)> {
         let mut jobs = self.jobs.lock().unwrap();
         if jobs.stopping {
             bail!("Aplikacija se zatvara");
+        }
+        if jobs.exporting {
+            bail!("Sačekajte da se izvoz završi pre indeksiranja");
         }
         if jobs
             .progress
@@ -77,6 +144,8 @@ impl App {
             ..Default::default()
         };
         jobs.progress = Some(initial.clone());
+        jobs.revision += 1;
+        let revision = jobs.revision;
         jobs.cancel = Arc::new(AtomicBool::new(false));
         let cancel = jobs.cancel.clone();
         let app = self.clone();
@@ -86,10 +155,13 @@ impl App {
                 work(&app.store, &cancel, &|mut p| {
                     p.id = id.clone();
                     p.status = "running".into();
-                    app.jobs.lock().unwrap().progress = Some(p);
+                    let mut jobs = app.jobs.lock().unwrap();
+                    jobs.progress = Some(p);
+                    jobs.revision += 1;
                 })
             }))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("Indexing worker failed")));
+            let result = result.and(app.refresh_stats());
             let mut jobs = app.jobs.lock().unwrap();
             let p = jobs.progress.as_mut().unwrap();
             p.current.clear();
@@ -104,8 +176,9 @@ impl App {
                 p.status = "completed".into();
                 p.phase = "Završeno".into();
             }
+            jobs.revision += 1;
         }));
-        Ok(initial)
+        Ok((initial, revision))
     }
     fn stop(&self) {
         let _stop_guard = self.stop_lock.lock().unwrap();
@@ -118,6 +191,120 @@ impl App {
         if let Some(t) = worker {
             let _ = t.join();
         }
+    }
+}
+struct ExportReservation(Arc<App>);
+impl Drop for ExportReservation {
+    fn drop(&mut self) {
+        if let Ok(mut jobs) = self.0.jobs.lock() {
+            jobs.exporting = false;
+        }
+    }
+}
+#[derive(Clone)]
+struct RequestControl {
+    cancelled: Arc<AtomicBool>,
+    deadline: Instant,
+}
+impl RequestControl {
+    fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now() + Duration::from_secs(15),
+        }
+    }
+    fn stopped(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed) || Instant::now() >= self.deadline
+    }
+    fn check(&self) -> Result<()> {
+        if self.stopped() {
+            bail!("Operation cancelled or timed out");
+        }
+        Ok(())
+    }
+    fn lock_store<'a>(&self, store: &'a SharedStore) -> Result<MutexGuard<'a, Store>> {
+        loop {
+            self.check()?;
+            match store.try_lock() {
+                Ok(guard) => return Ok(guard),
+                Err(TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+                Err(TryLockError::Poisoned(_)) => bail!("Store is unavailable"),
+            }
+        }
+    }
+}
+struct CancelOnDrop(Arc<AtomicBool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+fn query_store<T>(
+    app: &App,
+    control: &RequestControl,
+    query: impl FnOnce(&mut Store) -> Result<T>,
+) -> Result<T> {
+    let mut store = control.lock_store(&app.store)?;
+    control.check()?;
+    let progress = control.clone();
+    store
+        .conn
+        .progress_handler(1000, Some(move || progress.stopped()))?;
+    let result = query(&mut store);
+    store.conn.progress_handler(0, None::<fn() -> bool>)?;
+    control.check()?;
+    result
+}
+async fn run_api(
+    app: Arc<App>,
+    method: String,
+    path: String,
+    query: String,
+    bytes: Bytes,
+) -> Response {
+    let control = RequestControl::new();
+    // Permit ownership follows the blocking work, not the client connection.
+    // A disconnected client cancels that work before its permit is released.
+    let limited_query = matches!(path.as_str(), "/api/search" | "/api/file");
+    let permit = if limited_query {
+        match app.query_slots.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                return response(
+                    503,
+                    json!({"error":"Too many active searches; retry shortly"}),
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let _cancel = CancelOnDrop(control.cancelled.clone());
+    let work_control = control.clone();
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        api(&app, &method, &path, &query, &bytes, &work_control)
+    })
+    .await;
+    match task {
+        Ok(Ok((code, value))) => response(code, value),
+        Ok(Err(error)) => {
+            let code = if limited_query && control.stopped() {
+                408
+            } else if error
+                .downcast_ref::<rusqlite::Error>()
+                .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows))
+                || error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+            {
+                404
+            } else {
+                400
+            };
+            response(code, json!({"error":error.to_string()}))
+        }
+        Err(_) => response(500, json!({"error":"Internal worker failure"})),
     }
 }
 fn response(code: u16, v: Value) -> Response {
@@ -163,29 +350,7 @@ async fn handler(State(app): State<Arc<App>>, request: Request) -> Response {
             )
             .await
             {
-                Ok(Ok(bytes)) => {
-                    let task = tokio::task::spawn_blocking(move || {
-                        api(&app, &method, &path, &query, &bytes)
-                    })
-                    .await;
-                    match task {
-                        Ok(Ok((code, v))) => response(code, v),
-                        Ok(Err(e)) => {
-                            let code = if e
-                                .downcast_ref::<rusqlite::Error>()
-                                .is_some_and(|e| matches!(e, rusqlite::Error::QueryReturnedNoRows))
-                                || e.downcast_ref::<std::io::Error>()
-                                    .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-                            {
-                                404
-                            } else {
-                                400
-                            };
-                            response(code, json!({"error":e.to_string()}))
-                        }
-                        Err(_) => response(500, json!({"error":"Internal worker failure"})),
-                    }
-                }
+                Ok(Ok(bytes)) => run_api(app, method, path, query, bytes).await,
                 _ => response(413, json!({"error":"Request exceeded size or time limit"})),
             }
         }
@@ -260,6 +425,7 @@ fn api(
     path: &str,
     query: &str,
     bytes: &[u8],
+    control: &RequestControl,
 ) -> Result<(u16, Value)> {
     let post = matches!(
         path,
@@ -273,13 +439,8 @@ fn api(
         .collect();
     let val = |key: &str| q.get(key).cloned().unwrap_or_default();
     let v = match path {
-        "/api/session" => json!({"token":app.token}),
-        "/api/status" => {
-            let job = app.jobs.lock().unwrap().progress.clone();
-            let mut v = app.store.lock().unwrap().stats()?;
-            v["job"] = serde_json::to_value(job)?;
-            v
-        }
+        "/api/session" => json!({"token":app.token,"instance_id":app.instance_id}),
+        "/api/status" => app.status()?,
         "/api/sources" => {
             let s = app.store.lock().unwrap();
             if q.contains_key("id") || q.contains_key("offset") || q.contains_key("limit") {
@@ -301,13 +462,9 @@ fn api(
                 offset: number(&q, "offset", 0)?,
                 limit: number(&q, "limit", 0)?,
             };
-            let mut s = app.store.lock().unwrap();
-            let deadline = Instant::now() + Duration::from_secs(15);
-            s.conn
-                .progress_handler(1000, Some(move || Instant::now() >= deadline))?;
-            let result = s.search(o);
-            s.conn.progress_handler(0, None::<fn() -> bool>)?;
-            serde_json::to_value(result?)?
+            serde_json::to_value(query_store(app, control, |s| {
+                s.search_with_cancel(o, &|| control.stopped())
+            })?)?
         }
         "/api/file" => {
             let offset = number(&q, "text_offset", 0)?;
@@ -319,23 +476,29 @@ fn api(
             {
                 bail!("Invalid text page");
             }
-            app.store
-                .lock()
-                .unwrap()
-                .file(number(&q, "id", 0)?, offset as usize, max as usize)?
+            let id = number(&q, "id", 0)?;
+            query_store(app, control, |s| {
+                s.file_with_cancel(id, offset as usize, max as usize, &|| control.stopped())
+            })?
         }
         "/api/scan" => {
             let o: ScanOptions = decode(bytes)?;
             if !Path::new(&o.root).is_absolute() {
                 bail!("Unesite apsolutnu putanju foldera");
             }
-            let p = app.start(move |s, c, r| scanner::scan(s, o, c, r))?;
-            return Ok((202, json!({"job":p})));
+            let (p, revision) = app.start(move |s, c, r| scanner::scan(s, o, c, r))?;
+            return Ok((
+                202,
+                json!({"job":p,"job_revision":revision,"instance_id":app.instance_id}),
+            ));
         }
         "/api/import" => {
             let o: ImportOptions = decode(bytes)?;
-            let p = app.start(move |s, c, r| import::import(s, o, c, r))?;
-            return Ok((202, json!({"job":p})));
+            let (p, revision) = app.start(move |s, c, r| import::import(s, o, c, r))?;
+            return Ok((
+                202,
+                json!({"job":p,"job_revision":revision,"instance_id":app.instance_id}),
+            ));
         }
         "/api/cancel" => {
             app.jobs
@@ -362,21 +525,14 @@ fn api(
             if !o.encrypt && !password.is_empty() {
                 bail!("Enable encryption to set a new password");
             }
-            let jobs = app.jobs.lock().unwrap();
-            if jobs.stopping
-                || jobs
-                    .progress
-                    .as_ref()
-                    .is_some_and(|p| p.status == "running")
-            {
-                bail!("Sačekajte da se indeksiranje završi pre izvoza");
-            }
+            let _export = app.reserve_export()?;
             let mut s = app.store.lock().unwrap();
             let p = s.export(
                 Path::new(&o.destination),
                 o.include_content,
                 if o.encrypt { Some(&password) } else { None },
             )?;
+            *app.stats_cache.lock().unwrap() = s.stats()?;
             json!({"path":p,"encrypted":o.encrypt||s.encryption.is_some()})
         }
         "/api/browse" => browse(&val("path"))?,
@@ -504,10 +660,285 @@ pub async fn serve(store: Store, port: u16, no_browser: bool) -> Result<()> {
     if !no_browser {
         let _ = open_local(&base);
     }
-    let app = App::new(Arc::new(Mutex::new(store)), base);
+    let app = App::new(Arc::new(Mutex::new(store)), base)?;
     let shutdown_app = app.clone();
     let router = Router::new().fallback(handler).with_state(app.clone());
     axum::serve(listener,router).with_graceful_shutdown(async move{tokio::select!{_=shutdown_app.shutdown.notified()=>{},_=crate::shutdown_signal()=>{let a=shutdown_app.clone();let _=tokio::task::spawn_blocking(move||a.stop()).await;}}}).await?;
     tokio::task::spawn_blocking(move || app.stop()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::ScannedFile;
+    use tokio::io::AsyncWriteExt;
+
+    fn app() -> Result<(tempfile::TempDir, Arc<App>)> {
+        let temp = tempfile::tempdir()?;
+        let store = Arc::new(Mutex::new(Store::open(temp.path(), "")?));
+        let app = App::new(store, "http://127.0.0.1:1234".into())?;
+        Ok((temp, app))
+    }
+
+    #[test]
+    fn pending_query_is_cancelled_without_waiting_for_store() -> Result<()> {
+        let (_temp, app) = app()?;
+        let store = app.store.lock().unwrap();
+        let control = RequestControl::new();
+        let worker_control = control.clone();
+        let shared = app.store.clone();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, result) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started.send(()).unwrap();
+            finished
+                .send(worker_control.lock_store(&shared).is_err())
+                .unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(2))?;
+        control.cancelled.store(true, Ordering::Relaxed);
+        let cancelled = result.recv_timeout(Duration::from_secs(2));
+        drop(store);
+        worker.join().unwrap();
+        assert!(cancelled?);
+        Ok(())
+    }
+
+    #[test]
+    fn cancelled_running_sql_releases_store_and_clears_progress_hook() -> Result<()> {
+        let (_temp, app) = app()?;
+        let control = RequestControl::new();
+        let other_control = control.clone();
+        let other = app.clone();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, received) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = query_store(&other, &other_control, |store| {
+                started.send(())?;
+                let total: i64 = store.conn.query_row(
+                    "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<1000000000) SELECT sum(n) FROM numbers",
+                    [], |r| r.get(0),
+                )?;
+                Ok(total)
+            });
+            finished.send(result.is_err()).unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(2))?;
+        control.cancelled.store(true, Ordering::Relaxed);
+        let cancelled = received.recv_timeout(Duration::from_secs(2));
+        worker.join().unwrap();
+        assert!(cancelled?);
+        let store = app.store.lock().unwrap();
+        let total: i64 = store.conn.query_row(
+            "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<10000) SELECT sum(n) FROM numbers",
+            [], |r| r.get(0),
+        )?;
+        assert_eq!(
+            total, 50005000,
+            "a cancelled request must not interrupt later users of the connection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn query_deadline_includes_queue_wait() -> Result<()> {
+        let (_temp, app) = app()?;
+        let _store = app.store.lock().unwrap();
+        let expired = RequestControl {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            deadline: Instant::now() - Duration::from_secs(1),
+        };
+        assert!(expired.lock_store(&app.store).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn status_revision_and_cached_counts_follow_completed_job() -> Result<()> {
+        let (_temp, app) = app()?;
+        let (release, wait) = std::sync::mpsc::channel();
+        let (initial, revision) = app.start(move |shared, _, report| {
+            wait.recv()?;
+            let mut store = shared.lock().unwrap();
+            let source = store.begin_scan(&ScanOptions {
+                root: "/synthetic".into(),
+                label: "Unit test".into(),
+                ..Default::default()
+            })?;
+            store.upsert(
+                &source.id,
+                "unit",
+                &[ScannedFile {
+                    relative: "one.bin".into(),
+                    name: "one.bin".into(),
+                    dir: "".into(),
+                    extension: "bin".into(),
+                    size: 7,
+                    modified: 1,
+                    modified_ns: 1_000_000_000,
+                }],
+            )?;
+            store.finish_scan(&source.id, "unit", true)?;
+            drop(store);
+            report(Progress {
+                scanned: 1,
+                ..Default::default()
+            });
+            Ok(())
+        })?;
+        let store = app.store.lock().unwrap();
+        let status_app = app.clone();
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || sent.send(status_app.status()).unwrap());
+        let status = received.recv_timeout(Duration::from_secs(2));
+        drop(store);
+        reader.join().unwrap();
+        let status = status??;
+        assert_eq!(status["job"]["id"], initial.id);
+        assert_eq!(status["job_revision"], revision);
+        assert_eq!(status["stats_cached"], true);
+        let earlier_cache_read = app.refresh_status_cache()?;
+        assert_eq!(app.stats_cache.lock().unwrap()["files"], 0);
+        release.send(())?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while app.jobs.lock().unwrap().progress.as_ref().unwrap().status == "running" {
+            assert!(Instant::now() < deadline, "job did not complete");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let store = app.store.lock().unwrap();
+        // Inspect the snapshot directly while the store is unavailable: the
+        // worker must refresh counters before publishing its completed state.
+        let envelope = app.status_snapshot(earlier_cache_read)?;
+        assert_eq!(envelope["job"]["status"], "completed");
+        assert_eq!(
+            envelope["files"], 1,
+            "a completed revision must use the completed counters even if cache refresh began earlier"
+        );
+        let stats = app.stats_cache.lock().unwrap().clone();
+        assert_eq!(stats["files"], 1);
+        assert_eq!(stats["bytes"], 7);
+        assert_eq!(stats["sources"], 1);
+        let jobs = app.jobs.lock().unwrap();
+        assert_eq!(jobs.progress.as_ref().unwrap().status, "completed");
+        assert!(jobs.revision > revision);
+        drop(jobs);
+        drop(store);
+        app.stop();
+        Ok(())
+    }
+
+    #[test]
+    fn export_reservation_does_not_block_status_or_cancel() -> Result<()> {
+        let (_temp, app) = app()?;
+        let export = app.reserve_export()?;
+        assert!(app.reserve_export().is_err());
+        assert!(app.start(|_, _, _| Ok(())).is_err());
+        let store = app.store.lock().unwrap();
+        let other = app.clone();
+        let (sent, received) = std::sync::mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let status = other.status();
+            let cancel = api(
+                &other,
+                "POST",
+                "/api/cancel",
+                "",
+                b"{}",
+                &RequestControl::new(),
+            );
+            sent.send((status, cancel)).unwrap();
+        });
+        let result = received.recv_timeout(Duration::from_secs(2));
+        drop(store);
+        reader.join().unwrap();
+        let (status, cancel) = result?;
+        assert_eq!(status?["exporting"], true);
+        assert_eq!(cancel?.0, 200);
+        drop(export);
+        assert!(!app.jobs.lock().unwrap().exporting);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_admission_is_bounded_without_blocking_status() -> Result<()> {
+        let (_temp, app) = app()?;
+        let _permits = app
+            .query_slots
+            .clone()
+            .acquire_many_owned(MAX_QUERY_REQUESTS as u32)
+            .await?;
+        let rejected = run_api(
+            app.clone(),
+            "GET".into(),
+            "/api/search".into(),
+            "".into(),
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let status = run_api(
+            app,
+            "GET".into(),
+            "/api/status".into(),
+            "".into(),
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(status.status(), StatusCode::OK);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn real_socket_disconnect_cancels_query_waiting_on_store() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+        let address = listener.local_addr()?;
+        let app = App::new(
+            Arc::new(Mutex::new(Store::open(temp.path(), "")?)),
+            format!("http://{address}"),
+        )?;
+        let router = Router::new().fallback(handler).with_state(app.clone());
+        let (shutdown, closed) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(async {
+                    let _ = closed.await;
+                })
+                .await
+        });
+        let shared = app.store.clone();
+        let (locked, ready) = std::sync::mpsc::channel();
+        let (release, held) = std::sync::mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let _store = shared.lock().unwrap();
+            locked.send(()).unwrap();
+            let _ = held.recv();
+        });
+        ready.recv_timeout(Duration::from_secs(2))?;
+        let mut client = tokio::net::TcpStream::connect(address).await?;
+        client
+            .write_all(
+                format!("GET /api/search?q=waiting HTTP/1.1\r\nHost: {address}\r\n\r\n").as_bytes(),
+            )
+            .await?;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while app.query_slots.available_permits() == MAX_QUERY_REQUESTS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        drop(client);
+        let cancelled = tokio::time::timeout(Duration::from_secs(2), async {
+            while app.query_slots.available_permits() != MAX_QUERY_REQUESTS {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        release.send(())?;
+        owner.join().unwrap();
+        let _ = shutdown.send(());
+        server.await??;
+        cancelled?;
+        Ok(())
+    }
 }

@@ -2,13 +2,25 @@
 
 [Srpski](README.md) · English
 
+**Public release 0.1.5** · [Download](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) · [Browser demo](https://vladimirperovic.github.io/allfiles/) · [Documentation](docs/README.md) · [Changes](CHANGELOG.md) · [MIT license](LICENSE)
+
 A portable catalog for files on your computers, external drives, Blu-ray discs and LTO tapes. One executable opens a local web interface, and your catalog remains searchable when the original media are disconnected. AllFiles stores file metadata and extracted document text; **it does not back up the original files**.
 
-The application is designed for local use, including Omarchy Linux with its data inside a mounted VeraCrypt container. Windows and macOS builds are also available. There is no subscription, required cloud server or bundled AI model. The executable needs no separate Go, Node, Python or SQLite installation.
+The application is designed for local use, including Omarchy Linux with its data inside a mounted VeraCrypt container. The project targets Linux, Windows and macOS; consult the release for available packages and verified platforms. There is no subscription, required cloud server or bundled AI model. The executable needs no separate Rust, Go, Node, Python or SQLite installation.
 
 ## Start the application
 
-Download the archive for your computer from [GitHub Releases](https://github.com/vladimirperovic/allfiles/releases), verify its SHA-256 checksum and extract it into your chosen folder. For Omarchy on an Intel/AMD computer, use `linux-amd64`. Mount your VeraCrypt container first if you use one.
+Download an available archive for your computer from the [v0.1.5 release](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5), verify its SHA-256 checksum against the supplied checksums and extract it into your chosen folder. For Omarchy on an Intel/AMD computer, use `linux-amd64`. Mount your VeraCrypt container first if you use one. Historical 0.2.0 and 0.3.0 tags remain unchanged; their larger version numbers do not make them the current public package.
+
+| System | Release 0.1.5 archive |
+|---|---|
+| Windows Intel/AMD 64-bit | `allfiles-0.1.5-windows-amd64.zip` |
+| Linux Intel/AMD 64-bit | `allfiles-0.1.5-linux-amd64.tar.gz` |
+| Linux ARM64 | `allfiles-0.1.5-linux-arm64.tar.gz` |
+| macOS Apple Silicon | `allfiles-0.1.5-darwin-arm64.tar.gz` |
+| macOS Intel | `allfiles-0.1.5-darwin-amd64.tar.gz` |
+
+The native CI Linux packages target Ubuntu 24.04 and glibc 2.39 or newer. Older systems may require a source build. Download `SHA256SUMS.txt` too and verify the complete archive hash before extraction. Packages are unsigned. Check the release page for actual availability and validation results.
 
 From a terminal in the application's folder:
 
@@ -20,7 +32,7 @@ mkdir -p data
 
 AllFiles prints its local address and opens your browser. It chooses a free port by default. Add `--port 8765` for a fixed port, or `--no-browser` to open the address yourself. `serve` can be omitted. The `--data` directory **must already exist**; the application does not silently put your catalog in your home folder.
 
-The **EN / SR** button switches the web interface between English and Serbian and remembers that choice in the current browser. It does not translate or change your filenames, paths, media labels or document contents. Terminal help, password prompts and some underlying diagnostic messages are still in Serbian.
+The **EN / SR** button switches the web interface between English and Serbian and remembers that choice in the current browser. It does not translate or change your filenames, paths, media labels or document contents. Terminal messages and underlying diagnostics may use English or Serbian independently of that selection.
 
 On Windows, use PowerShell:
 
@@ -42,6 +54,8 @@ data/
   content.sqlite           extracted document text and its search index
   encryption.json          present and required for encrypted catalogs
 ```
+
+If the content database is missing or does not match the catalog, names and paths remain available. The indexed-document count reflects available content, and the application explains the incomplete copy. Restore the matching content database while the service is closed, or reindex accessible originals; opening an incomplete copy does not erase existing metadata.
 
 The content database is created when needed. Keeping it separate lets you export a smaller metadata-only catalog; separation alone does not guarantee faster searches. Size depends on the number and length of paths, extracted text and search indexes.
 
@@ -72,11 +86,11 @@ Search filenames/paths or document content, then narrow results by media and fil
 | PDF with a text layer | Extractable text |
 | DOCX, XLSX, PPTX | Text from modern Office XML files |
 | ODT, ODS, ODP | OpenDocument text |
-| TXT and supported plain-text formats | Text content |
+| TXT, MD, CSV, TSV, LOG, JSON, XML, HTML/HTM | Text content; HTML is read as text, without execution |
 | Image-only scanned PDF | Metadata only; OCR is not included |
 | Legacy DOC, XLS, PPT | Metadata only in this version |
 
-Extraction does not reproduce document layout, images or every embedded object. Protected, damaged and unsupported documents remain in the catalog even when text extraction fails. Processing is limited to 256 MiB per input document and 8 MiB of extracted text, with additional limits on expanded Office XML. File details show when text is truncated.
+Extraction does not reproduce document layout, images or every embedded object. Protected, damaged and unsupported documents remain in the catalog even when text extraction fails. Limits are 256 MiB per input document, 8 MiB of extracted UTF-8 text, 32 MiB per expanded Office XML part, 64 MiB of expanded Office XML in total, and 20,000 PDF pages. File details show when text is truncated. These are not strict memory or time limits for the PDF parser.
 
 An LTO tape must be available as a mounted filesystem or through a supported catalog export. AllFiles does not control a tape drive or decode proprietary backup formats.
 
@@ -96,6 +110,8 @@ Start with a CSV report containing filenames, paths, sizes and, if applicable, m
 
 **Compatibility with your particular WinCatalog export still needs validation on a real sample.** This is not a promise to read every CSV/XML layout or WinCatalog's native working database. Keep the original catalog. Metadata import does not reconstruct document text; content indexing needs access to the original documents.
 
+In hierarchical XML, folder names/paths and media metadata may be attributes or elements preceding their file records. Late metadata that would change an already interpreted path or medium is rejected during validation before writes. UNC paths and media serial numbers are preserved.
+
 ## Export, back up and move a catalog
 
 Use **Export for USB** while no scan/import is running, or close the service and run:
@@ -110,7 +126,7 @@ An ordinary export preserves the source's encryption state: plaintext stays plai
 
 ## Optional catalog encryption
 
-AllFiles can encrypt the database files independently of VeraCrypt. It uses the maintained **Adiantum SQLite VFS**, reading and writing encrypted data directly without a plaintext working copy.
+AllFiles can encrypt the database files independently of VeraCrypt. It uses **Adiantum through a SQLite VFS**, reading and writing encrypted data directly without a plaintext working copy.
 
 In **Export for USB**, select **Encrypt the copy with a password**, choose a new folder and confirm your password. For an already encrypted catalog, ordinary export keeps its password; **New password for the copy** changes only the new copy. The equivalent CLI command is:
 
@@ -183,9 +199,11 @@ Use the actual Chromium executable installed on your system. Do not enable profi
 
 The local HTTP service is intended for a personal desktop session. It is not a multi-user authorization boundary: other local processes can access an unlocked service. Do not forward its port to the internet. A permanently hosted web edition would need separate authentication, HTTPS and server-side data handling; it is not included.
 
-## Demo and development
+## Demo without your data
 
-Preview the interface with clearly synthetic data in a separate directory:
+Open the [public demo](https://vladimirperovic.github.io/allfiles/) directly in your browser. It opens the dashboard with **1 LTO tape, 3 Blu-ray media and 3 disks** (one computer and two external drives). All names, paths and documents are fictional. The demo runs only in the browser: it has no local service, access to your disks, real indexing or catalog unlocking. Publishing the demo does not publish your local catalog.
+
+The full application also has a separate local demo. Preview it with synthetic data in a new directory:
 
 ```sh
 mkdir -p demo-data
@@ -195,13 +213,17 @@ mkdir -p demo-data
 
 Do not use the demo directory for your real catalog. `demo` seeds it and exits; `serve` opens the interface.
 
-## Rust 0.3.0 and upgrading
+## Public release 0.1.5 and upgrading
 
-The default production build is now **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. The embedded interface and two-database format are unchanged. Existing Go source files are retained as a reference/fallback; normal build scripts and CI use Cargo.
+The production build is **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. Existing Go source files are retained as a reference implementation and for compatibility checks; production builds use Cargo. See the [architecture](docs/ARCHITECTURE.md) for a module overview.
 
-Close the old application, back up the entire data directory, then run the new executable with the same `--data`. No reimport or reindex is required. Existing encrypted catalogs retain their password and v1 manifest. Reading and updating encrypted copies has been checked in both directions between Go 0.2.0 and Rust 0.3.0. The previous source and binaries remain available at Git tag `v0.2.0`.
+**0.1.5 identifies this public release of the current Rust application.** Historical 0.2.0/0.3.0 tags and releases are unchanged; this smaller number does not mean a return to older Go code. The [changelog](CHANGELOG.md) describes this release.
 
-Windows x86-64 has been exercised locally, including four browser widths, both languages, MCP and encrypted exports. Static Linux x86-64/ARM64 musl cross-builds are available; building a binary does not verify execution on that device. CI defines five native platforms, including both Mac architectures. Consult each release's notes for the packages actually built and tested.
+Close the old application, back up the entire data directory, then run the new executable with the same `--data`. The catalog format and v1 encryption manifest remain compatible; changing the executable alone does not require reimporting. Rescan available originals with content enabled to refresh previously incomplete or corrected text extraction. The historical bidirectional encrypted-catalog checks between Go 0.2.0 and Rust 0.3.0 remain documented; current evidence is in [release validation](docs/VALIDATION.md).
+
+Windows x86-64 has been exercised locally, including browser behavior, both languages, MCP and encrypted exports. GitHub Actions defines Linux amd64/arm64, macOS amd64/arm64 and Windows amd64 jobs; a workflow definition is not evidence that each job has passed. Cross-building is not a runtime test on that device. See the [public release notes](docs/PUBLIC_RELEASE.md) and download page for actual package and validation status.
+
+## Development and builds
 
 Use Rust **1.99.1** with the committed `Cargo.lock`. Building bundled native SQLite also requires a C compiler: Arch/Omarchy `base-devel`, macOS Xcode Command Line Tools, or Windows Visual Studio C++ Build Tools / llvm-mingw. Users of finished binaries do not need Rust or a separate SQLite installation.
 
@@ -215,21 +237,23 @@ python scripts/smoke.py target/release/allfiles
 
 Append `.exe` to the last path on Windows. Python is only for the integration check. Rebuild after changing `web/`, which is embedded into the executable. The optional Go-compatibility test is explicitly ignored unless a historical encrypted fixture is provided through `ALLFILES_GO_FIXTURE` and tests are run with `--include-ignored`.
 
-`sh scripts/build.sh` or `.\scripts\build.ps1` builds the current platform into `dist/`. An optional Rust target argument (`-Target` in PowerShell) requires that target's standard library and compatible C linker. Versioning comes from `Cargo.toml`; cross-building is no longer Go's compiler-only workflow. CI performs native tests and builds on Linux amd64/arm64, macOS amd64/arm64 and Windows amd64. Artifact upload is optional; releases are published separately. Account billing/usage restrictions can prevent jobs from starting regardless of artifact storage settings.
+`sh scripts/build.sh` or `.\scripts\build.ps1` builds and copies the native executable and documentation into `dist/`. An optional Rust target argument (`-Target` in PowerShell) requires that target's standard library and compatible C linker. The application version comes from `Cargo.toml` and must match `VERSION` when releasing. Python 3 scripts create the ZIP/tar.gz archives and checksums; see [package a tested build](docs/PUBLIC_RELEASE.md#package-a-tested-build). GitHub Actions defines native platform tests and builds; check the results of the specific run. See [CONTRIBUTING.md](CONTRIBUTING.md) for development and synthetic regression checks.
 
 Performance depends on the actual archive, disk, query and content. Short/common queries and large document collections need their own measurements; there is no guaranteed database size or search latency. Reproducible synthetic benchmarks include `BenchmarkCatalog100K` and `BenchmarkEncryptedCatalog100K` in the historical `v0.2.0` Go tests. OCR, automatic synchronization between computers, original-file duplicate detection, direct LTO control and signed binaries are not included in this version.
 
-Version 0.2.0 adds transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removes redundant per-document writes during metadata import. It also bounds CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope.
+## Historical measurements and remaining work
+
+Historical version 0.2.0 introduced transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removed redundant per-document writes during metadata import. It also bounded CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the Serbian guide records the paired before/after measurements and their scope. These historical version labels and samples have not been renumbered for public release 0.1.5.
 
 Remaining work includes cursor pagination for very deep pages, reads that do not wait for an indexing transaction (one lock currently serializes requests), export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 
-The separate [Go](experiments/go-search/README.md) and [Rust](experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow verifies every count and ordered ID page and records runtime versions, timings, peak process memory and benchmark executable sizes.
+The separate [Go](https://github.com/vladimirperovic/allfiles/blob/main/experiments/go-search/README.md) and [Rust](https://github.com/vladimirperovic/allfiles/blob/main/experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow verifies every count and ordered ID page and records runtime versions, timings, peak process memory and benchmark executable sizes.
 
-The [measured comparison and recommendations](experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the 0.3.0 production port now includes native integration and compatible encryption. These SQL measurements exclude complete application behavior and encryption.
+The [measured comparison and recommendations](https://github.com/vladimirperovic/allfiles/blob/main/experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the historical 0.3.0 production port included native integration and compatible encryption. These SQL measurements exclude complete application behavior and encryption.
 
-The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](experiments/results/2026-10-26-rust-app-windows.json), reproduced by `scripts/compare-http.py`.
+The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](https://github.com/vladimirperovic/allfiles/blob/main/experiments/results/2026-10-26-rust-app-windows.json), reproduced by `scripts/compare-http.py`.
 
-### Search and indexing optimizations (after 0.3.0)
+### Historical Rust 0.3.0 optimization measurements (26 October 2026)
 
 Same machine, catalog and method as above: two reversed-order rounds, three warmups, 15 measured requests per case, mean of round medians. This compares Rust 0.3.0 before and after these changes. Every response has the same total and ordered IDs as before.
 
@@ -260,4 +284,10 @@ Writes are measured as whole CLI process time on the same machine: two reversed-
 - **Database cache.** SQLite keeps up to 64 MiB of pages per database instead of about 2 MiB, so repeated searches read the file less often and, for encrypted catalogs, decrypt less often. Memory is used only for pages actually read.
 - **Snippets.** Snippets match terms regardless of case and diacritics, like the search itself: the query “kuca” now shows the text around “Kuća” instead of the start of the document. A document is decompressed only until the snippet is complete. With several terms the snippet starts at whichever term occurs first.
 
-A rare filename is about 0.03 ms slower because of the probe. Measurements use a warm cache and an unencrypted catalog; they exclude cold storage, encryption, large varied documents, PDF/Office extraction and memory. Write times depend most on the disk, so a container or USB drive can show a different ratio. [Raw samples](experiments/results/2026-10-26-rust-optimizations-windows.json) are reproduced by `scripts/compare-http.py` and `scripts/compare-writes.py`.
+A rare filename is about 0.03 ms slower because of the probe. Measurements use a warm cache and an unencrypted catalog; they exclude cold storage, encryption, large varied documents, PDF/Office extraction and memory. Write times depend most on the disk, so a container or USB drive can show a different ratio. [Raw samples](https://github.com/vladimirperovic/allfiles/blob/main/experiments/results/2026-10-26-rust-optimizations-windows.json) are reproduced by `scripts/compare-http.py` and `scripts/compare-writes.py`.
+
+## License and reporting issues
+
+AllFiles is available under the [MIT license](LICENSE), copyright 2026 Vladimir Perović. Dependencies retain their own licenses, listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+Report functional bugs through [GitHub Issues](https://github.com/vladimirperovic/allfiles/issues) with the version, operating system and a small synthetic reproduction. Do not upload catalogs, private documents, personal paths, passwords, tokens or `encryption.json`. Follow [SECURITY.md](SECURITY.md) for vulnerability reports and security boundaries.
