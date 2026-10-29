@@ -14,6 +14,7 @@ This is the public release of the current Rust application. The version was deli
 
 ### Correctness and responsiveness
 
+- Updated ZIP parsing to 9.0.5 and enabled full header-consistency validation before reading Office XML. Conflicting filenames, duplicate entries and overlapping entries are rejected; valid streamed and ZIP64 documents remain covered by tests. AllFiles reads archive text in memory and does not extract archives to disk.
 - Status responses carry an instance identifier and monotonic job revision. The interface rejects stale job updates, handles service restarts and preserves the closed state after shutdown.
 - HTTP disconnects and MCP cancellation stop pending/running search work. Search admission is bounded, and the request deadline includes waiting for the database. MCP output retains complete JSON frames when requests are cancelled and handles EOF or broken output pipes.
 - Status and cancellation remain available during database work and synchronous export. Busy status polls may use cached counters; mutation jobs refresh counters before publishing completion.

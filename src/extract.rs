@@ -246,11 +246,17 @@ fn office(path: &Path, ext: &str, sink: &mut Sink, cancel: &AtomicBool) -> Resul
     if zip.len() > 10_000 {
         bail!("Document archive has too many entries");
     }
+    // zip 9.0.5 keeps this protection opt-in (GHSA-m665-v7pm-7grj).
+    // Validate all entries before trusting Office part names or indexing text.
+    check(cancel)?;
+    zip.validate_header_consistency()?;
+    check(cancel)?;
     let mut names = Vec::new();
     let mut expanded = 0u64;
     for i in 0..zip.len() {
         let f = zip.by_index(i)?;
-        if !part(f.name(), ext) {
+        let name = f.name()?;
+        if !part(&name, ext) {
             continue;
         }
         if f.size() > MAX_XML_PART as u64
@@ -260,7 +266,7 @@ fn office(path: &Path, ext: &str, sink: &mut Sink, cancel: &AtomicBool) -> Resul
             bail!("Document expanded XML limit exceeded");
         }
         expanded += f.size();
-        names.push(f.name().to_owned());
+        names.push(name.into_owned());
     }
     if names.is_empty() {
         bail!("Document archive has no recognized text parts");
@@ -590,6 +596,150 @@ fn sheet(bytes: &[u8], shared: &[String], sink: &mut Sink, cancel: &AtomicBool) 
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    fn office_zip_fixture(
+        method: zip::CompressionMethod,
+        zip64: bool,
+        streamed: bool,
+    ) -> Result<Vec<u8>> {
+        fn write_parts<W: Write + std::io::Seek>(
+            mut writer: zip::ZipWriter<W>,
+            method: zip::CompressionMethod,
+            zip64: bool,
+        ) -> Result<W> {
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(method)
+                .large_file(zip64);
+            writer.start_file("word/document.xml", options)?;
+            writer.write_all(
+                b"<w:document xmlns:w='w'><w:p><w:t>Safe document text</w:t></w:p></w:document>",
+            )?;
+            writer.start_file("word/document.bin", options)?;
+            writer.write_all(b"Ignored data")?;
+            Ok(writer.finish()?)
+        }
+        if streamed {
+            Ok(write_parts(zip::ZipWriter::new_stream(Vec::new()), method, zip64)?.into_inner())
+        } else {
+            Ok(write_parts(
+                zip::ZipWriter::new(std::io::Cursor::new(Vec::new())),
+                method,
+                zip64,
+            )?
+            .into_inner())
+        }
+    }
+
+    fn rejected_office_archive(bytes: &[u8], expected: &str) -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("malformed.docx");
+        fs::write(&path, bytes)?;
+        let result = extract(&path, &AtomicBool::new(false));
+        assert_eq!(result.status, "error", "{result:?}");
+        assert!(result.text.is_empty(), "{result:?}");
+        assert!(result.detail.contains(expected), "{result:?}");
+        assert_eq!(fs::read(&path)?, bytes);
+        assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn office_rejects_inconsistent_zip_header_names() -> Result<()> {
+        for method in [
+            zip::CompressionMethod::Stored,
+            zip::CompressionMethod::Deflated,
+        ] {
+            let original = office_zip_fixture(method, false, false)?;
+            assert_eq!(&original[..4], b"PK\x03\x04");
+            assert_eq!(&original[30..47], b"word/document.xml");
+            // The central directory still advertises a recognized Office part,
+            // but the local header advertises a different same-length name.
+            let mut local_mismatch = original.clone();
+            local_mismatch[30] = b'W';
+            rejected_office_archive(&local_mismatch, "header inconsistency")?;
+            // Also reject the reverse mismatch, before skipping unknown parts.
+            let central = original
+                .windows(4)
+                .position(|b| b == b"PK\x01\x02")
+                .unwrap();
+            let mut central_mismatch = original;
+            central_mismatch[central + 46] = b'W';
+            rejected_office_archive(&central_mismatch, "header inconsistency")?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn office_rejects_duplicate_and_overlapping_zip_entries() -> Result<()> {
+        let original = office_zip_fixture(zip::CompressionMethod::Stored, false, false)?;
+        let central: Vec<_> = original
+            .windows(4)
+            .enumerate()
+            .filter_map(|(i, b)| (b == b"PK\x01\x02").then_some(i))
+            .collect();
+        assert_eq!(central.len(), 2);
+        let mut duplicate = original.clone();
+        duplicate[central[1] + 46..central[1] + 63].copy_from_slice(b"word/document.xml");
+        rejected_office_archive(&duplicate, "duplicate file names")?;
+
+        let mut overlap = original;
+        let second_offset =
+            u32::from_le_bytes(overlap[central[1] + 42..central[1] + 46].try_into()?) as usize;
+        let first_data = 30
+            + u16::from_le_bytes(overlap[26..28].try_into()?) as usize
+            + u16::from_le_bytes(overlap[28..30].try_into()?) as usize;
+        let size = u32::try_from(second_offset - first_data + 1)?.to_le_bytes();
+        // Both headers agree on sizes, but the first payload crosses into the
+        // next entry. Per-entry parity alone must not accept this archive.
+        for offset in [18, 22, central[0] + 20, central[0] + 24] {
+            overlap[offset..offset + 4].copy_from_slice(&size);
+        }
+        rejected_office_archive(&overlap, "overlapping entries")?;
+        Ok(())
+    }
+
+    #[test]
+    fn office_accepts_consistent_stored_deflated_streamed_and_zip64_archives() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("valid.docx");
+        for method in [
+            zip::CompressionMethod::Stored,
+            zip::CompressionMethod::Deflated,
+        ] {
+            for zip64 in [false, true] {
+                for streamed in [false, true] {
+                    let bytes = office_zip_fixture(method, zip64, streamed)?;
+                    if streamed {
+                        assert_ne!(u16::from_le_bytes(bytes[6..8].try_into()?) & 8, 0);
+                    }
+                    if zip64 {
+                        let name_length = u16::from_le_bytes(bytes[26..28].try_into()?) as usize;
+                        let extra_length = u16::from_le_bytes(bytes[28..30].try_into()?) as usize;
+                        let start = 30 + name_length;
+                        let mut extra = &bytes[start..start + extra_length];
+                        let mut has_zip64 = false;
+                        while !extra.is_empty() {
+                            let id = u16::from_le_bytes(extra[..2].try_into()?);
+                            let length = u16::from_le_bytes(extra[2..4].try_into()?) as usize;
+                            has_zip64 |= id == 1;
+                            extra = &extra[4 + length..];
+                        }
+                        assert!(has_zip64, "fixture must contain a ZIP64 extra field");
+                    }
+                    fs::write(&path, &bytes)?;
+                    let result = extract(&path, &AtomicBool::new(false));
+                    assert_eq!(
+                        result.status, "indexed",
+                        "{method:?} zip64={zip64} streamed={streamed}: {result:?}"
+                    );
+                    assert_eq!(result.text, "Safe document text");
+                    assert_eq!(fs::read(&path)?, bytes);
+                    assert_eq!(fs::read_dir(temp.path())?.count(), 1);
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn xlsx_empty_strings_cdata_and_escaped_characters() -> Result<()> {

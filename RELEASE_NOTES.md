@@ -22,6 +22,7 @@ Create an empty data directory, then run the extracted executable with `serve --
 
 ## Changes
 
+- Updated the ZIP dependency and enabled strict header-consistency checks for Office documents, with regression coverage for malformed archives and valid ZIP64/streamed documents.
 - Corrected frontend/backend status races, restart recovery, completed-job refresh and stale file details.
 - Bounded concurrent search work, cancellation on disconnect, and responsive status during exports.
 - Corrected missing-content statistics, Unicode search/snippets, document extraction and catalog imports.

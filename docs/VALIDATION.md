@@ -8,7 +8,7 @@ All 26 steps of the final validation run passed, including the release build, ve
 
 | Check | Passed |
 |---|---:|
-| Rust unit/integration tests, including generated Go encryption fixture | 47 / 47 |
+| Rust unit/integration tests, including generated Go encryption fixture | 50 / 50 |
 | Search, Unicode, sort/filter oracle and concurrent reads | 568 / 568 |
 | Storage, export and consistency regression | 12 / 12 |
 | Document extraction regression | 17 / 17 |
@@ -23,6 +23,8 @@ All 26 steps of the final validation run passed, including the release build, ve
 | Static dashboard demo, including English migration and language persistence | 19 / 19 |
 
 Additional checks passed: HTTP/MCP smoke test, startup/statistics query inspection, interleaved import correctness, `go test ./...`, `go vet ./...`, `go test -race ./...`, tests and vet for the Go search experiment, and reading a Rust-encrypted export with the Go reference implementation. The demo had no JavaScript exceptions, failed HTTP responses, backend API calls or external requests. Desktop and narrow mobile screenshots were inspected.
+
+The final security update pins `zip` 9.0.5 and explicitly validates archive header consistency before selecting Office XML. Tests reject mismatched local/central names, duplicate names and overlapping entries, while accepting stored/deflated, ZIP64 and streamed data-descriptor documents. AllFiles does not use ZIP streaming extraction to disk; the overwrite chain in [GHSA-m665-v7pm-7grj](https://github.com/zip-rs/zip2/security/advisories/GHSA-m665-v7pm-7grj) is not an application code path. The validation is enabled explicitly because the upstream check is opt-in.
 
 Local toolchain: Windows 11 x64, Rust 1.99.1, bundled SQLite 3.54.1, Python 3.12.10, Node 26.5.1 and Go 1.26.10. Browser tests used headless Microsoft Edge. The local Rust build uses the GNU Windows toolchain; GitHub builds Windows with the native runner toolchain. Their executable checksums are expected to differ.
 
@@ -43,7 +45,7 @@ Grouped import transactions use bounded shared buffers. Media summaries use a co
 
 ## Performance observations
 
-The baseline is the Rust executable immediately before the second set of ten corrections. The candidate is the final 0.1.5 Windows build. These are warm-cache synthetic measurements on one computer, not guarantees for other storage or catalogs.
+The baseline is the Rust executable immediately before the second set of ten corrections. The candidate contains those corrections; measurements preceded the final ZIP-library hardening, which does not change these search and CSV-import paths. These are warm-cache synthetic measurements on one computer, not guarantees for other storage or catalogs.
 
 | Workload | Before | 0.1.5 |
 |---|---:|---:|
