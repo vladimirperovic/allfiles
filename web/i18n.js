@@ -2,6 +2,14 @@
 (() => {
   'use strict';
   const english = {
+    'Preskoči na pretragu': 'Skip to search', 'Mediji u biblioteci': 'Library media',
+    'Prikaz': 'View', 'Zbijeno': 'Compact', 'Udobno': 'Comfortable',
+    'Prva stranica': 'First page', 'Poslednja stranica': 'Last page', 'Stranica': 'Page',
+    'Pronađi medij': 'Find media', 'Naziv ili lokacija medija…': 'Media name or location…',
+    'Svi tipovi medija': 'All media types', 'Prikaz medija': 'Media view', 'Lista': 'List', 'Kartice': 'Cards',
+    'Prikazano {shown} od {total} medija': 'Showing {shown} of {total} media',
+    'Nema medija koji odgovaraju filterima.': 'No media match these filters.',
+    'Unesite broj stranice između 1 i {pages}.': 'Enter a page number between 1 and {pages}.',
     'AllFiles — Sve na jednom mestu': 'AllFiles — Everything in one place',
     'AllFiles početna': 'AllFiles home', 'VAŠ LIČNI KATALOG': 'YOUR CATALOG',
     'RADNI PROSTOR': 'WORKSPACE', 'Glavna navigacija': 'Main navigation', 'Pretraga': 'Search',

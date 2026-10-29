@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="sr-Latn">
+<html lang="sr-Latn" data-density="compact" data-media-view="list">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -12,6 +12,7 @@
   <script src="/particles.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#search-input">Preskoči na pretragu</a>
   <svg class="icon-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="7.3"/><path d="m16 16 5 5"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></symbol>
@@ -55,7 +56,7 @@
       </nav>
       <div class="sidebar-divider"></div>
       <div class="sidebar-section-label media-heading">MOJA BIBLIOTEKA<button class="icon-button tiny" data-action="add-source" aria-label="Dodaj medij"><svg class="icon"><use href="#i-plus"/></svg></button></div>
-      <div class="sidebar-sources" id="sidebar-sources"><p class="sidebar-empty">Vaši računari, diskovi i arhive na jednom mestu.</p></div>
+      <div class="sidebar-sources" id="sidebar-sources" role="toolbar" aria-label="Mediji u biblioteci" aria-orientation="vertical"><p class="sidebar-empty">Vaši računari, diskovi i arhive na jednom mestu.</p></div>
       <div class="sidebar-bottom">
         <div class="privacy-card"><span class="privacy-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong id="privacy-title">Lokalno. Lično.</strong><p id="privacy-description">Vaši fajlovi ostaju vaši.</p></div></div>
         <button class="sidebar-utility" data-action="export"><svg class="icon"><use href="#i-download"/></svg><span>Spakuj za USB</span><svg class="icon small"><use href="#i-chevron"/></svg></button>
@@ -85,14 +86,14 @@
           <div class="search-options"><div class="segmented" role="group" aria-label="Pretražuj"><button class="selected" data-mode="files" aria-pressed="true"><svg class="icon small"><use href="#i-file"/></svg>Fajlovi</button><button data-mode="content" aria-pressed="false"><svg class="icon small"><use href="#i-text"/></svg>Sadržaj</button><button data-mode="all" aria-pressed="false">Sve</button></div><div class="filter-controls"><label class="sr-only" for="source-filter">Medij</label><select id="source-filter"><option value="">Svi mediji</option></select><label class="sr-only" for="ext-filter">Tip fajla</label><select id="ext-filter"><option value="">Svi tipovi</option><option value="pdf">PDF</option><option value="docx">Word · DOCX</option><option value="xlsx">Excel · XLSX</option><option value="pptx">PowerPoint · PPTX</option><option value="jpg">Slike · JPG</option><option value="png">Slike · PNG</option><option value="mp4">Video · MP4</option><option value="zip">Arhive · ZIP</option></select></div></div>
         </div>
 
-        <div class="results-heading"><div><h2 id="results-title">Svi fajlovi <span id="result-count">0</span></h2><span class="search-timing" id="search-timing"></span></div><label class="sort-label">Sortiraj <select id="sort-select"><option value="name">Naziv</option><option value="modified">Najnovije</option><option value="size">Veličina</option></select></label></div>
+        <div class="results-heading"><div><h2 id="results-title">Svi fajlovi <span id="result-count">0</span></h2><span class="search-timing" id="search-timing"></span></div><div class="results-controls"><label class="density-label" for="density-select">Prikaz <select id="density-select"><option value="compact">Zbijeno</option><option value="comfortable">Udobno</option></select></label><label class="sort-label">Sortiraj <select id="sort-select"><option value="name">Naziv</option><option value="modified">Najnovije</option><option value="size">Veličina</option></select></label></div></div>
         <div class="library-layout" id="library-layout">
           <section class="results-panel glass-panel" aria-label="Rezultati pretrage" aria-busy="false" id="results-panel">
             <div class="table-scroll" id="table-scroll"><table class="file-table"><thead><tr><th scope="col">Naziv fajla</th><th scope="col">Medij</th><th scope="col" class="size-column">Veličina</th><th scope="col" class="date-column">Izmenjeno</th><th scope="col"><span class="sr-only">Detalji</span></th></tr></thead><tbody id="file-rows"></tbody></table></div>
             <div class="empty-state" id="empty-state"><div class="empty-art"><div class="empty-ring"></div><svg class="icon"><use href="#i-folder"/></svg><span class="empty-spark"></span></div><h3>Vaša biblioteka počinje ovde.</h3><p>Dodajte prvi disk ili folder. Fajlove ćete pronaći<br>i kada njihov medij nije priključen.</p><button class="button button-coral" data-action="add-source"><svg class="icon"><use href="#i-plus"/></svg>Dodaj prvi medij</button><button class="text-button" data-action="import">Imate WinCatalog katalog? Uvezite ga <span>↗</span></button></div>
             <div class="no-results" id="no-results" hidden><svg class="icon"><use href="#i-search"/></svg><h3>Nema rezultata za ovu pretragu.</h3><p>Pokušajte sa drugim nazivom ili uklonite filtere.</p><button class="button button-ghost" id="reset-filters">Očisti pretragu i filtere</button></div>
             <div class="loading-state" id="loading-state" hidden><span class="spinner"></span><span>Pretražujem biblioteku…</span></div>
-            <footer class="table-footer" id="table-footer" hidden><span id="pagination-summary"></span><div><button class="icon-button" id="previous-page" aria-label="Prethodna stranica"><svg class="icon reversed"><use href="#i-chevron"/></svg></button><span id="page-number">1</span><button class="icon-button" id="next-page" aria-label="Sledeća stranica"><svg class="icon"><use href="#i-chevron"/></svg></button></div></footer>
+            <footer class="table-footer" id="table-footer" hidden><span id="pagination-summary"></span><div class="pagination-controls"><button class="icon-button" id="first-page" aria-label="Prva stranica" title="Prva stranica">«</button><button class="icon-button" id="previous-page" aria-label="Prethodna stranica"><svg class="icon reversed"><use href="#i-chevron"/></svg></button><span class="page-position"><span id="page-number">1</span> / <span id="page-count">1</span></span><button class="icon-button" id="next-page" aria-label="Sledeća stranica"><svg class="icon"><use href="#i-chevron"/></svg></button><button class="icon-button" id="last-page" aria-label="Poslednja stranica" title="Poslednja stranica">»</button><form id="page-jump-form" class="page-jump"><label for="page-input">Stranica</label><input id="page-input" type="number" inputmode="numeric" min="1" max="1" step="1" value="1" required><button id="go-to-page" class="button button-ghost" type="submit">Idi</button></form></div></footer>
           </section>
           <aside class="details-panel glass-panel" id="details-panel" aria-label="Detalji fajla" hidden></aside>
         </div>
@@ -102,7 +103,10 @@
       <section class="view" id="view-sources" aria-labelledby="sources-title" hidden>
         <div class="page-heading"><div><p class="eyebrow">SVAKI MEDIJ IMA SVOJE MESTO</p><h1 id="sources-title">Vaša <span>biblioteka.</span></h1><p class="page-subtitle">Računari, eksterni diskovi i arhive. Uvek na dohvat pretrage.</p></div></div>
         <div class="section-title"><h2>Moji mediji <span id="source-card-count">0</span></h2><button class="button button-ghost" data-action="import"><svg class="icon"><use href="#i-upload"/></svg>Uvezi WinCatalog</button></div>
-        <div class="source-cards" id="source-cards"></div>
+        <div class="media-controls"><label class="media-search-label" for="media-search"><span>Pronađi medij</span><input id="media-search" type="search" placeholder="Naziv ili lokacija medija…" autocomplete="off"></label><label for="media-kind-filter"><span>Tip medija</span><select id="media-kind-filter"><option value="">Svi tipovi medija</option><option value="lto">LTO kaseta</option><option value="bluray">Blu-ray / DVD</option><option value="computer">Računar</option><option value="external">Eksterni disk</option><option value="folder">Folder</option></select></label><label for="media-view-select"><span>Prikaz medija</span><select id="media-view-select"><option value="list">Lista</option><option value="cards">Kartice</option></select></label></div>
+        <p id="media-results-summary" class="media-results-summary" role="status" aria-live="polite"></p>
+        <p id="media-empty" class="sidebar-empty" hidden>Nema medija koji odgovaraju filterima.</p>
+        <div class="source-cards" id="source-cards" data-media-view="list"></div>
       </section>
 
       <section class="view" id="view-index" aria-labelledby="index-title" hidden>

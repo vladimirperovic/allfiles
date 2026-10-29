@@ -1,6 +1,6 @@
 # Validation of 0.1.5
 
-Recorded on 2026-10-29. Tests use generated files and catalogs; no personal catalog is required or published. Results below describe the final local Windows x64 Rust build. The [native validation run](https://github.com/vladimirperovic/allfiles/actions/runs/40851121500) passed on all five targets: Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64. Each ran formatting, Clippy, Rust tests, a release build, HTTP/MCP smoke checks, synthetic regressions and archive verification. Release publication additionally requires all five native jobs to succeed for the release tag; follow [Build and test](https://github.com/vladimirperovic/allfiles/actions/workflows/build.yml) for that run.
+Recorded on 2026-10-29. Tests use generated files and catalogs; no personal catalog is required or published. Results below describe the final local Windows x64 Rust build. The [native validation run](https://github.com/vladimirperovic/allfiles/actions/runs/40854555180) passed on all five targets: Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64. Each ran formatting, Clippy, Rust tests, a release build, HTTP/MCP smoke checks, synthetic regressions and archive verification. Release publication additionally requires all five native jobs to succeed for the release tag; follow [Build and test](https://github.com/vladimirperovic/allfiles/actions/workflows/build.yml) for that run.
 
 ## Local results
 
@@ -14,13 +14,13 @@ All 26 steps of the final validation run passed, including the release build, ve
 | Document extraction regression | 17 / 17 |
 | Original frontend state regression | 6 / 6 |
 | HTTP / MCP regression | 10 / 10 |
-| Frontend async state, source reuse and shutdown regression | 25 / 25 |
+| Frontend async state, source reuse, density and navigation regression | 33 / 33 |
 | Live frontend/backend contract | 6 / 6 |
 | Server cancellation, status, export and shutdown | 20 / 20 |
 | Storage lifecycle and search/snippet checks | 67 / 67 |
-| Browser end-to-end behavior | 13 / 13 |
+| Browser end-to-end behavior | 31 / 31 |
 | Browser startup/reconnection and missing-content recovery | 11 / 11 |
-| Static dashboard demo, including English migration and language persistence | 19 / 19 |
+| Static dashboard demo, including density, filters and language persistence | 24 / 24 |
 
 Additional checks passed: HTTP/MCP smoke test, startup/statistics query inspection, interleaved import correctness, `go test ./...`, `go vet ./...`, `go test -race ./...`, tests and vet for the Go search experiment, and reading a Rust-encrypted export with the Go reference implementation. The demo had no JavaScript exceptions, failed HTTP responses, backend API calls or external requests. Desktop and narrow mobile screenshots were inspected.
 
@@ -42,6 +42,16 @@ Local toolchain: Windows 11 x64, Rust 1.99.1, bundled SQLite 3.54.1, Python 3.12
 10. Shutdown: late status responses cannot reopen the closed interface.
 
 Grouped import transactions use bounded shared buffers. Media summaries use a covering index and correlated aggregates. Statistics avoid repeated full counts, unchanged media nodes are reused, filename-only previews avoid unnecessary content scans, and synchronous exports keep status/cancellation available.
+
+## Large-library usability
+
+The final compact interface was tested in a real browser against the native application with **30 LTO tapes, 100 Blu-ray discs and 102,600 synthetic files**. The largest medium contains 100,020 files across 1,667 result pages. All **41 usability checks** passed, with no JavaScript exceptions or failed API responses. The small public demo keeps its separate seven-media fictional library.
+
+At 1440 × 1000, Compact displays 15 complete file rows compared with nine in Comfortable mode (34 px versus 56 px row height). At 1280 × 800, Compact displays ten complete rows. The API still requests 60 files per page; increased visible density does not increase the backend batch. Filenames retain full-path tooltips, and Comfortable mode restores visible paths.
+
+All eight issues from the large-library review were retested: desktop navigation stays available during long scrolling; page changes return to the start of results; returning to Search restores its controls; media can be filtered by name, location and type; first/last/direct-page controls reach distant results; sidebar keyboard navigation uses a single tab stop; mobile details trap and restore focus correctly; and bottom navigation buttons fit inside their bar. Reaching the search field through the keyboard path decreased from 139 to ten Tab presses.
+
+Seven viewport widths from 320 to 1440 px had no horizontal page overflow. Mobile rows and primary navigation retain touch-sized controls. Media list and card layouts, saved density preferences, empty results, long labels, asynchronous detail responses and the final result page were checked. These are reproducible task-based checks, not a study with external participants.
 
 ## Performance observations
 

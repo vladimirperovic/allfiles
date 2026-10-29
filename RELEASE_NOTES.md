@@ -22,6 +22,7 @@ Create an empty data directory, then run the extracted executable with `serve --
 
 ## Changes
 
+- Compact Explorer-style file rows, searchable/filterable media lists, direct page navigation and improved keyboard/mobile navigation for large archives.
 - Updated the ZIP dependency and enabled strict header-consistency checks for Office documents, with regression coverage for malformed archives and valid ZIP64/streamed documents.
 - Corrected frontend/backend status races, restart recovery, completed-job refresh and stale file details.
 - Bounded concurrent search work, cancellation on disconnect, and responsive status during exports.

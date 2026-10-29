@@ -87,6 +87,10 @@ The folder picker lists up to 2,000 subfolders and shows a notice if more exist.
 
 Search filenames/paths or document content, then narrow results by media and file type. Results identify the original location even when its media are offline. Opening the original file requires the media to be available at the recorded path. Scans skip symbolic links and the application's own data directory.
 
+The default **Compact** view uses Explorer-style rows to show more files at once; choose **Comfortable** for larger rows. Full names and paths remain available in tooltips and file details. Results are loaded in bounded pages, with first/last-page controls and a page-number jump for large catalogs.
+
+**My media** provides a compact list, a name/location search and a media-type filter. Switch to cards when you prefer an overview. Use `/` to focus file search, or the keyboard skip link to reach the main workspace without tabbing through every medium.
+
 | Document type | Content indexing |
 |---|---|
 | PDF with a text layer | Extractable text |

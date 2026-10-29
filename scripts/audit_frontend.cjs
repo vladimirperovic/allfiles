@@ -12,17 +12,22 @@ class Node {
   constructor() {
     this.value = ''; this.textContent = ''; this.hidden = false; this.disabled = false;
     this.dataset = {}; this.children = []; this.listeners = {};
+    this.scrollTop = 0;
     this.firstChild = { textContent: '' };
     this.classList = { toggle() {}, add() {}, remove() {} };
   }
   addEventListener(name, callback) { (this.listeners[name] ||= []).push(callback); }
   setAttribute(name, value) { this[name] = value; }
+  getAttribute(name) { return this[name] ?? null; }
+  setCustomValidity(message) { this.validationMessage = message; }
+  reportValidity() { return !this.validationMessage; }
   removeAttribute(name) { delete this[name]; }
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   contains() { return false; }
   querySelector(selector) { return get(selector); }
   querySelectorAll() { return []; }
+  focus() {}
   click() { if (!this.disabled) for (const callback of this.listeners.click || []) callback({}); }
 }
 function get(selector) { if (!nodes.has(selector)) nodes.set(selector, new Node()); return nodes.get(selector); }
@@ -30,6 +35,7 @@ function get(selector) { if (!nodes.has(selector)) nodes.set(selector, new Node(
 const requests = [];
 const window = {
   addEventListener() {},
+  scrollTo() {}, matchMedia: () => ({ matches: false }),
   AllFilesI18n: {
     t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, name) => values[name] ?? match),
     formats: { number: new Intl.NumberFormat('en'), decimal: new Intl.NumberFormat('en'), integer: new Intl.NumberFormat('en'), date: new Intl.DateTimeFormat('en') },
@@ -37,11 +43,13 @@ const window = {
 };
 const document = {
   querySelector: get, querySelectorAll: () => [], addEventListener() {},
+  documentElement: new Node(), activeElement: null,
   createElement: () => new Node(), createElementNS: () => new Node(),
   createTextNode: text => ({ textContent: text }), hidden: false,
 };
 const context = vm.createContext({
   window, document, URLSearchParams, AbortController, setTimeout, clearTimeout,
+  localStorage: { getItem: () => null, setItem() {} },
   location: { hash: '' }, history: { replaceState() {} },
   fetch: (url, options) => new Promise((resolve, reject) => {
     requests.push({ url, reject, resolve: result => resolve({ ok: true, json: async () => result }) });

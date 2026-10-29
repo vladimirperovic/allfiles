@@ -6,8 +6,9 @@ const path = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 
-function harness() {
+function harness({ saved = {}, storageBlocked = false } = {}) {
   const nodes = new Map(), timers = new Set(), requests = [];
+  const storage = new Map(Object.entries(saved)), scrolls = [];
   let createdNodes = 0;
   class Node {
     constructor(tag = 'div') {
@@ -15,6 +16,7 @@ function harness() {
       this.tagName = tag.toUpperCase(); this._value = ''; this.textContent = '';
       this.hidden = false; this.disabled = false; this.checked = false;
       this.dataset = {}; this.children = []; this.listeners = {}; this.firstChild = { textContent: '' };
+      this.scrollTop = 0; this.isConnected = true;
       this.classList = { toggle() {}, add() {}, remove() {} };
     }
     get value() { return this._value; }
@@ -24,13 +26,18 @@ function harness() {
     }
     addEventListener(event, callback) { (this.listeners[event] ||= []).push(callback); }
     setAttribute(name, value) { this[name] = value; }
+    getAttribute(name) { return this[name] ?? null; }
+    setCustomValidity(message) { this.validationMessage = message; }
+    reportValidity() { return !this.validationMessage; }
     removeAttribute(name) { delete this[name]; }
     append(...children) { this.children.push(...children); }
     replaceChildren(...children) { this.children = children; if (this.tagName === 'SELECT') this._value = children[0]?.value || ''; }
-    contains() { return false; }
+    contains(node) { return node === this || this.children.some(child => child === node || child.contains?.(node)); }
     querySelector(selector) { return get(selector); }
     querySelectorAll() { return []; }
-    remove() {} close() { this.open = false; } showModal() { this.open = true; } focus() {} reset() {}
+    remove() {} close() { this.open = false; } showModal() { this.open = true; } focus() { document.activeElement = this; } reset() {}
+    getBoundingClientRect() { return { top: 0, bottom: 100 }; }
+    dispatch(event, data = {}) { for (const callback of this.listeners[event] || []) callback({ target: this, currentTarget: this, preventDefault() {}, ...data }); }
     after(...added) { for (const node of added) if (node.id) nodes.set('#' + node.id, node); }
   }
   function get(selector) {
@@ -40,6 +47,7 @@ function harness() {
   const events = {};
   const window = {
     addEventListener(name, callback) { (events[name] ||= []).push(callback); },
+    scrollTo: options => scrolls.push(options), matchMedia: () => ({ matches: false }),
     AllFilesI18n: {
       language: 'sr',
       t: (message, values = {}) => String(message).replace(/\{(\w+)\}/g, (match, name) => values[name] ?? match),
@@ -48,11 +56,13 @@ function harness() {
   };
   const document = {
     querySelector: get, querySelectorAll: () => [], addEventListener() {}, hidden: false,
+    documentElement: new Node('html'), activeElement: null,
     createElement: tag => new Node(tag), createElementNS: (_, tag) => new Node(tag),
     createTextNode: text => ({ textContent: text }),
   };
   const context = vm.createContext({
     window, document, URLSearchParams, AbortController,
+    localStorage: { getItem: key => { if (storageBlocked) throw new Error('Storage unavailable'); return storage.get(key) ?? null; }, setItem: (key, value) => { if (storageBlocked) throw new Error('Storage unavailable'); storage.set(key, value); } },
     setTimeout: (callback, ms) => { const timer = setTimeout(callback, ms); timers.add(timer); return timer; },
     clearTimeout: timer => { clearTimeout(timer); timers.delete(timer); },
     location: { hash: '' }, history: { replaceState() {} },
@@ -62,9 +72,9 @@ function harness() {
     })),
   });
   let source = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
-  source = source.replace('  initialize();', '  window.audit = { state, renderStatus, refreshStatus, loadSources, renderSources, filterToSource, runSearch, renderResults, renderDetails, showDetails, api, shutdown, initialize, acceptJob };');
+  source = source.replace('  initialize();', '  window.audit = { state, renderStatus, refreshStatus, loadSources, renderSources, renderMediaFilter, filterToSource, runSearch, searchChanged, renderResults, renderDetails, showDetails, closeDetails, setView, preference, api, shutdown, initialize, acceptJob };');
   vm.runInContext(source, context);
-  return { ...window.audit, get, requests, events, i18n: window.AllFilesI18n, created: () => createdNodes, dispose() { for (const timer of timers) clearTimeout(timer); } };
+  return { ...window.audit, get, requests, events, storage, scrolls, document, i18n: window.AllFilesI18n, created: () => createdNodes, dispose() { for (const timer of timers) clearTimeout(timer); } };
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -308,6 +318,88 @@ const cases = [
     h.requests.find(r => r.url.startsWith('/api/file')).resolve({ file: file(1), text: 'late content' });
     await Promise.all([sources, searching, details]);
     return { pass: h.state.closed && h.state.sources[0].id === 'A' && h.state.results[0].id === 1 && !h.state.detailsState.response, source: h.state.sources[0].id, result: h.state.results[0].id, detail_response: h.state.detailsState.response };
+  }],
+  ['media name and location search folds accents and combines terms with a kind filter', 'usability', async h => {
+    h.state.sources = [
+      { ...source('A', 'Đorđe Archive'), kind: 'lto', location: 'Polica Četiri' },
+      { ...source('B', 'Đorđe Backup'), kind: 'external', location: 'Polica Četiri' },
+      { ...source('C', 'Other Archive'), kind: 'lto', location: 'Polica Pet' },
+    ];
+    h.renderSources(); h.get('#source-filter').value = 'B';
+    const cards = h.get('#source-cards').children.slice(0, 3);
+    h.get('#media-search').value = ' DJORDJE  cetiri '; h.get('#media-kind-filter').value = 'lto'; h.renderMediaFilter();
+    assert.deepEqual(cards.map(card => card.hidden), [false, true, true]);
+    assert.equal(h.get('#media-results-summary').textContent, 'Prikazano 1 od 3 medija');
+    assert.equal(h.get('#source-filter').value, 'B'); assert.equal(h.get('#source-filter').children.length, 4);
+    h.get('#media-search').value = 'missing'; h.renderMediaFilter();
+    assert.ok(cards.every(card => card.hidden)); assert.equal(h.get('#media-empty').hidden, false);
+    h.get('#media-search').value = ''; h.get('#media-kind-filter').value = ''; h.renderMediaFilter();
+    return { pass: cards.every(card => !card.hidden) && h.requests.length === 0, restored: cards.length, request_count: h.requests.length, selected: h.get('#source-filter').value };
+  }],
+  ['media filtering remains active after refreshed source data and reuses unchanged cards', 'usability', async h => {
+    h.state.sources = [source('A', 'Needle'), source('B', 'Unrelated')]; h.renderSources();
+    const first = h.get('#source-cards').children[0];
+    h.get('#media-search').value = 'needle'; h.renderMediaFilter();
+    h.state.sources = [source('A', 'Needle'), source('B', 'Needle renamed'), source('C', 'Unrelated')]; h.renderSources();
+    const cards = h.get('#source-cards').children.slice(0, 3);
+    return { pass: cards[0] === first && !cards[0].hidden && !cards[1].hidden && cards[2].hidden && h.get('#media-results-summary').textContent === 'Prikazano 2 od 3 medija', visibility: cards.map(card => !card.hidden), reused: cards[0] === first };
+  }],
+  ['closing file details invalidates a pending successful or failed response', 'usability', async h => {
+    const opening = h.showDetails(file(1)); h.closeDetails();
+    h.requests[0].resolve({ file: file(1), text: 'late content' }); await opening;
+    assert.equal(h.state.selected, null); assert.equal(h.state.detailsState, null); assert.equal(h.get('#details-panel').hidden, true);
+    const second = h.showDetails(file(2)); h.closeDetails();
+    h.requests[1].reject(new Error('late error')); await second;
+    return { pass: h.state.selected === null && h.state.detailsState === null && h.get('#details-panel').hidden, hidden: h.get('#details-panel').hidden, selected: h.state.selected };
+  }],
+  ['view changes reset document scroll only when the visible view changes', 'usability', async h => {
+    h.setView('sources'); h.setView('sources'); h.setView('search'); h.setView('search');
+    return { pass: h.scrolls.length === 2 && h.scrolls.every(position => position.top === 0), scroll_calls: h.scrolls.length };
+  }],
+  ['query changes reset list scroll while background refresh keeps the current position', 'usability', async h => {
+    h.state.total = 126; h.state.results = [file(1)]; h.renderResults();
+    h.get('#table-scroll').scrollTop = 420;
+    const refreshing = h.runSearch(); h.requests[0].resolve({ total: 126, results: [file(1)], elapsed_ms: 1 }); await refreshing;
+    assert.equal(h.get('#table-scroll').scrollTop, 420);
+    h.get('#search-input').value = 'changed'; h.searchChanged(true);
+    h.requests[1].resolve({ total: 1, results: [file(2)], elapsed_ms: 1 }); await flush();
+    return { pass: h.get('#table-scroll').scrollTop === 0 && h.state.offset === 0 && h.state.limit === 60, scroll: h.get('#table-scroll').scrollTop, limit: h.state.limit };
+  }],
+  ['preferences use safe defaults when stored values are invalid or storage is blocked', 'usability', async () => {
+    const outcomes = [];
+    for (const options of [{ saved: { 'allfiles.density': 'giant', 'allfiles.mediaView': 'unknown' } }, { storageBlocked: true }]) {
+      const h = harness(options);
+      try {
+        outcomes.push({ density: h.preference('allfiles.density', ['compact', 'comfortable'], 'compact'), media: h.preference('allfiles.mediaView', ['list', 'cards'], 'list') });
+      } finally { h.dispose(); }
+    }
+    return { pass: outcomes.every(value => value.density === 'compact' && value.media === 'list'), outcomes };
+  }],
+  ['density and media layout controls persist preferences without requesting more files', 'usability', async h => {
+    h.get('#density-select').value = 'comfortable'; h.get('#density-select').dispatch('change');
+    h.get('#source-cards').scrollTop = 600;
+    h.get('#media-view-select').value = 'cards'; h.get('#media-view-select').dispatch('change');
+    const restarted = harness({ saved: Object.fromEntries(h.storage) });
+    try {
+      return { pass: h.document.documentElement.dataset.density === 'comfortable' && h.document.documentElement.dataset.mediaView === 'cards' && h.get('#source-cards').dataset.mediaView === 'cards' && h.get('#source-cards').scrollTop === 0 && restarted.preference('allfiles.density', ['compact', 'comfortable'], 'compact') === 'comfortable' && restarted.preference('allfiles.mediaView', ['list', 'cards'], 'list') === 'cards' && h.requests.length === 0 && h.state.limit === 60, preferences: Object.fromEntries(h.storage), requests: h.requests.length, limit: h.state.limit };
+    } finally { restarted.dispose(); }
+  }],
+  ['first last and go-to-page guard pending requests and reject invalid page numbers', 'usability', async h => {
+    h.state.total = 126; h.state.results = Array.from({ length: 60 }, (_, i) => file(i + 1)); h.renderResults();
+    assert.equal(h.get('#first-page').disabled, true); assert.equal(h.get('#page-input').max, '3');
+    h.get('#table-scroll').scrollTop = 600; h.get('#last-page').dispatch('click');
+    h.get('#first-page').dispatch('click'); h.get('#last-page').dispatch('click');
+    assert.equal(h.requests.length, 1); assert.equal(h.state.offset, 120);
+    assert.equal(h.get('#first-page').disabled, true); assert.equal(h.get('#go-to-page').disabled, true);
+    h.requests[0].resolve({ total: 126, results: Array.from({ length: 6 }, (_, i) => file(i + 121)), elapsed_ms: 1 }); await flush();
+    assert.equal(h.get('#table-scroll').scrollTop, 0); assert.equal(h.get('#last-page').disabled, true);
+    for (const value of ['0', '4', '1.5', '', 'NaN', 'Infinity']) { h.get('#page-input').value = value; h.get('#page-jump-form').dispatch('submit'); }
+    assert.equal(h.requests.length, 1); assert.equal(h.state.offset, 120);
+    h.get('#page-input').value = '2'; h.get('#page-jump-form').dispatch('submit');
+    assert.equal(h.state.offset, 60); assert.equal(new URL(h.requests[1].url, 'http://localhost').searchParams.get('limit'), '60');
+    h.requests[1].resolve({ total: 126, results: [file(61)], elapsed_ms: 1 }); await flush();
+    h.get('#first-page').dispatch('click');
+    return { pass: h.state.offset === 0 && h.requests.length === 3 && h.state.limit === 60, request_count: h.requests.length, final_offset: h.state.offset, limit: h.state.limit };
   }],
 ];
 

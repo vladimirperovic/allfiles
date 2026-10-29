@@ -14,6 +14,8 @@ This is the public release of the current Rust application. The version was deli
 
 ### Correctness and responsiveness
 
+- Compact Explorer-style file rows, searchable media lists with type filters, and first/last/page-number navigation make large archives easier to browse. Comfortable rows and media cards remain available.
+- Navigation remains visible on long media lists, explicit page/query changes reset the results scroll position, and mobile detail panels manage keyboard focus and restore it when closed.
 - Updated ZIP parsing to 9.0.5 and enabled full header-consistency validation before reading Office XML. Conflicting filenames, duplicate entries and overlapping entries are rejected; valid streamed and ZIP64 documents remain covered by tests. AllFiles reads archive text in memory and does not extract archives to disk.
 - Status responses carry an instance identifier and monotonic job revision. The interface rejects stale job updates, handles service restarts and preserves the closed state after shutdown.
 - HTTP disconnects and MCP cancellation stop pending/running search work. Search admission is bounded, and the request deadline includes waiting for the database. MCP output retains complete JSON frames when requests are cancelled and handles EOF or broken output pipes.
@@ -31,4 +33,4 @@ OCR, direct tape-drive control, automatic cross-computer synchronization, origin
 
 ### Validation
 
-Local Windows checks and synthetic regression results are recorded in [docs/VALIDATION.md](docs/VALIDATION.md). The configured Linux/macOS/Windows matrix is a validation plan until its individual jobs finish successfully. Consult the [release page](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) for packages actually published; historical performance samples remain in [experiments/](experiments/README.md).
+Local Windows checks and synthetic regression results are recorded in [docs/VALIDATION.md](docs/VALIDATION.md). Release publication requires successful native Linux/macOS/Windows jobs. Consult the [release page](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) for published packages; historical performance samples remain in [experiments/](https://github.com/vladimirperovic/allfiles/blob/main/experiments/README.md).

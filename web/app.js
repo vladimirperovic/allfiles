@@ -12,6 +12,16 @@
   let contentWarning = null;
   let exportRequestPayload = null;
   let exportInProgress = false;
+  let sidebarFocusId = null;
+  let resetResultsScroll = false;
+  let detailsModal = false, detailsBlocked = [], detailsReturnFocus = null;
+
+  function preference(key, allowed, fallback) {
+    try { const value = localStorage.getItem(key); return allowed.includes(value) ? value : fallback; }
+    catch { return fallback; }
+  }
+  function savePreference(key, value) { try { localStorage.setItem(key, value); } catch { /* Preferences are optional. */ } }
+  function fold(value) { return String(value || '').toLowerCase().replace(/đ/g, 'dj').normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
 
   function element(tag, className, text) {
     const node = document.createElement(tag);
@@ -109,6 +119,8 @@
   }
   function setView(view) {
     if (!['search', 'sources', 'index'].includes(view)) view = 'search';
+    const changed = state.view !== view;
+    if (changed && state.selected !== null) closeDetails();
     state.view = view;
     $$('.view').forEach(section => { section.hidden = section.id !== `view-${view}`; });
     $$('.nav-item').forEach(button => {
@@ -118,6 +130,7 @@
     });
     $('#breadcrumb-current').textContent = { search: t('Pretraga'), sources: t('Moji mediji'), index: t('Indeksiranje') }[view];
     history.replaceState(null, '', `#${view}`);
+    if (changed) window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   }
 
   function renderStatus(status) {
@@ -262,7 +275,7 @@
     const language = i18n.language || '';
     const items = state.sources.map(source => ({ source, key: JSON.stringify([language, source.id, source.root, source.label, source.kind, source.location, source.last_scan, source.file_count, source.total_size]) }));
     const renderKey = language + '\n' + items.map(item => item.key).join('\n');
-    if (renderKey === sourcesRenderKey) { updateSourceSelection(); return; }
+    if (renderKey === sourcesRenderKey) { updateSourceSelection(); renderMediaFilter(); return; }
     const nextViews = new Map();
     $('#nav-source-count').textContent = i18n.formats.number.format(state.sources.length);
     $('#source-card-count').textContent = i18n.formats.number.format(state.sources.length);
@@ -286,12 +299,15 @@
       sideButton.append(icon(kindIcons[source.kind] || 'drive'), element('span', 'source-name', source.label));
       sideButton.dataset.sourceId = source.id;
       sideButton.addEventListener('click', () => filterToSource(source.id));
+      sideButton.addEventListener('focus', () => { sidebarFocusId = source.id; updateSourceSelection(); });
       sidebar.append(sideButton);
       const card = element('article', 'source-card glass-panel');
       const top = element('div', 'source-card-top');
       const type = element('span', 'source-card-icon'); type.append(icon(kindIcons[source.kind] || 'drive'));
       top.append(type, element('span', 'source-card-kind', t(kindNames[source.kind] || source.kind) || t('Medij')));
-      card.append(top, element('h3', '', source.label), element('p', 'source-card-location', source.location || t('Lokacija nije uneta')));
+      const heading = element('h3', '', source.label); heading.title = source.label;
+      const location = element('p', 'source-card-location', source.location || t('Lokacija nije uneta')); location.title = source.location || '';
+      card.append(top, heading, location);
       const metrics = element('div', 'source-card-stats');
       const files = element('div'); files.append(element('strong', '', i18n.formats.number.format(source.file_count || 0)), element('span', '', t('fajlova')));
       const size = element('div'); size.append(element('strong', '', fmtBytes(source.total_size)), element('span', '', t('ukupno podataka')));
@@ -316,24 +332,59 @@
     sourceFilter.value = selectedFilter;
     const add = element('button', 'add-source-card'); add.append(icon('plus'), element('strong', '', t('Dodajte novi medij')), element('span', '', t('Proširite svoju biblioteku'))); add.addEventListener('click', () => sourceDialog()); cards.append(add);
     updateSourceSelection();
+    renderMediaFilter();
     if (state.ready && sourceFilter.value !== selectedFilter) searchChanged(true);
   }
-  function updateSourceSelection() {
-    $$('.sidebar-source').forEach(button => button.classList.toggle('selected', button.dataset.sourceId === $('#source-filter').value));
+  function renderMediaFilter() {
+    const terms = fold($('#media-search').value).trim().split(/\s+/).filter(Boolean);
+    const kind = $('#media-kind-filter').value;
+    let shown = 0;
+    state.sources.forEach(source => {
+      const visible = (!kind || source.kind === kind) && terms.every(term => fold(`${source.label} ${source.location || ''}`).includes(term));
+      const view = sourceViews.get(source.id);
+      if (view) view.card.hidden = !visible;
+      if (visible) shown++;
+    });
+    $('#media-results-summary').textContent = t('Prikazano {shown} od {total} medija', { shown: i18n.formats.number.format(shown), total: i18n.formats.number.format(state.sources.length) });
+    $('#media-empty').hidden = shown > 0 || state.sources.length === 0;
+  }
+  function revealSidebarButton(button) {
+    const list = $('#sidebar-sources');
+    if (!button || !list.getBoundingClientRect || list.offsetParent === null) return;
+    const item = button.getBoundingClientRect(), bounds = list.getBoundingClientRect();
+    if (item.top < bounds.top) list.scrollTop -= bounds.top - item.top;
+    else if (item.bottom > bounds.bottom) list.scrollTop += item.bottom - bounds.bottom;
+  }
+  function updateSourceSelection(reveal = false) {
+    const selected = $('#source-filter').value;
+    const buttons = $$('.sidebar-source');
+    if (reveal && selected) sidebarFocusId = selected;
+    const target = buttons.find(button => button.dataset.sourceId === sidebarFocusId) || buttons.find(button => button.dataset.sourceId === selected) || buttons[0];
+    sidebarFocusId = target?.dataset.sourceId || null;
+    buttons.forEach(button => {
+      const active = button.dataset.sourceId === selected;
+      button.classList.toggle('selected', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.tabIndex = button === target ? 0 : -1;
+    });
+    $('#source-filter').title = state.sources.find(source => source.id === selected)?.label || t('Svi mediji');
+    if (reveal) revealSidebarButton(target);
   }
   function filterToSource(id) {
     $('#source-filter').value = String(id);
     state.offset = 0;
-    updateSourceSelection();
+    resetResultsScroll = true;
+    updateSourceSelection(true);
     setView('search');
     closeDetails();
     runSearch();
   }
   function searchChanged(immediate = false) {
     state.offset = 0;
+    resetResultsScroll = true;
     closeDetails();
     $('#clear-search').hidden = !$('#search-input').value;
-    updateSourceSelection();
+    updateSourceSelection(true);
     clearTimeout(state.searchTimer);
     if (state.searchController) state.searchController.abort();
     state.searchController = null;
@@ -373,10 +424,12 @@
       const lastOffset = Math.max(0, Math.ceil(state.total / state.limit) - 1) * state.limit;
       if (state.offset > lastOffset) {
         state.offset = lastOffset;
+        resetResultsScroll = true;
         closeDetails();
         if (state.total > 0) return runSearch();
       }
       renderResults();
+      if (resetResultsScroll) { $('#table-scroll').scrollTop = 0; resetResultsScroll = false; }
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (state.closed || state.searchController !== controller) return;
@@ -425,10 +478,10 @@
       row.setAttribute('aria-label', t('{name}, {source}, {size}. Prikaži detalje.', { name: file.name, source: file.source_label || t('Medij'), size: fmtBytes(file.size) }));
       row.dataset.id = file.id;
       const nameCell = element('td'); const fileCell = element('div', 'file-cell'); const nameBlock = element('div', 'file-name-block');
-      const name = element('span', 'file-name', file.name); name.title = file.name;
+      const name = element('span', 'file-name', file.name); name.title = file.path || file.relative_path || file.name;
       const path = element('span', 'file-path', parentFolder(file)); path.title = file.path || file.relative_path || '';
       nameBlock.append(name, path);
-      if (file.snippet) nameBlock.append(element('p', 'file-snippet', file.snippet));
+      if (file.snippet) { const snippet = element('p', 'file-snippet', file.snippet); snippet.title = file.snippet; nameBlock.append(snippet); }
       fileCell.append(typeIcon(file), nameBlock); nameCell.append(fileCell);
       const sourceCell = element('td'); const sourceText = element('div', 'source-table-cell'); sourceText.title = file.source_label || ''; sourceText.append(icon(kindIcons[file.kind] || 'drive'), element('span', '', file.source_label || '—')); sourceCell.append(sourceText);
       const sizeCell = element('td', 'size-column', fmtBytes(file.size));
@@ -450,37 +503,84 @@
   }
   function updatePaginationControls() {
     const unavailable = state.searchPending || Boolean(state.searchError);
-    $('#previous-page').disabled = unavailable || state.offset === 0;
-    $('#next-page').disabled = unavailable || state.offset + state.limit >= state.total;
+    const pages = Math.max(1, Math.ceil(state.total / state.limit));
+    const page = Math.floor(state.offset / state.limit) + 1;
+    $('#previous-page').disabled = $('#first-page').disabled = unavailable || state.offset === 0;
+    $('#next-page').disabled = $('#last-page').disabled = unavailable || state.offset + state.limit >= state.total;
+    $('#page-count').textContent = i18n.formats.number.format(pages);
+    const input = $('#page-input');
+    input.max = String(pages);
+    input.disabled = $('#go-to-page').disabled = unavailable || state.total === 0;
+    if (document.activeElement !== input || unavailable) input.value = String(page);
   }
   function changePage(direction) {
+    const pages = Math.max(1, Math.ceil(state.total / state.limit));
+    goToPage(Math.min(pages, Math.max(1, Math.floor(state.offset / state.limit) + 1 + direction)));
+  }
+  function goToPage(value) {
     if (state.searchPending || state.searchError) return;
-    const lastOffset = Math.max(0, Math.ceil(state.total / state.limit) - 1) * state.limit;
-    const next = Math.min(lastOffset, Math.max(0, state.offset + direction * state.limit));
+    const pages = Math.max(1, Math.ceil(state.total / state.limit)), page = Number(value);
+    if (!Number.isInteger(page) || page < 1 || page > pages) {
+      $('#page-input').setCustomValidity(t('Unesite broj stranice između 1 i {pages}.', { pages: i18n.formats.number.format(pages) }));
+      $('#page-input').reportValidity();
+      return;
+    }
+    $('#page-input').setCustomValidity('');
+    const next = (page - 1) * state.limit;
     if (next === state.offset) return;
     state.offset = next;
+    resetResultsScroll = true;
     closeDetails();
     runSearch();
   }
+  function detailsFocusable() { return $$('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex="0"]', $('#details-panel')).filter(node => !node.hidden); }
+  function syncDetailsMode(focus = false, action = 'close') {
+    const panel = $('#details-panel');
+    const overlay = state.selected !== null && !panel.hidden && Boolean(window.matchMedia?.('(max-width: 820px)').matches);
+    if (overlay && !detailsModal) {
+      detailsModal = true;
+      let current = panel;
+      while (current.parentElement) {
+        const parent = current.parentElement;
+        [...parent.children].forEach(sibling => {
+          if (sibling !== current && !sibling.inert && !['SCRIPT', 'STYLE', 'LINK', 'DIALOG'].includes(sibling.tagName)) { sibling.inert = true; detailsBlocked.push(sibling); }
+        });
+        if (parent === document.body) break;
+        current = parent;
+      }
+    } else if (!overlay && detailsModal) {
+      detailsBlocked.forEach(node => { node.inert = false; });
+      detailsBlocked = []; detailsModal = false;
+    }
+    if (overlay) {
+      panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true');
+      if (focus) ($(`[data-detail-action="${action}"]`, panel) || $('[data-detail-action="close"]', panel))?.focus({ preventScroll: true });
+    } else { panel.removeAttribute('role'); panel.removeAttribute('aria-modal'); }
+  }
   function closeDetails() {
-    const returnFocus = $('#details-panel').contains(document.activeElement);
+    const returnFocus = detailsModal || $('#details-panel').contains(document.activeElement);
     const selectedRow = $$('.file-row').find(row => row.dataset.id === String(state.selected));
+    const fallback = detailsReturnFocus;
     state.selected = null;
     state.detailsState = null;
     state.detailsRequest++;
     $('#details-panel').hidden = true;
+    syncDetailsMode();
+    detailsReturnFocus = null;
     $('#library-layout').classList.remove('with-details');
     $$('.file-row.selected').forEach(row => row.classList.remove('selected'));
-    if (returnFocus) selectedRow?.focus();
+    if (returnFocus) (selectedRow || (fallback?.isConnected ? fallback : $('#search-input')))?.focus({ preventScroll: true });
   }
   async function showDetails(file) {
     if (state.closed) return;
+    const opening = state.selected === null || $('#details-panel').hidden;
+    if (opening) detailsReturnFocus = document.activeElement;
     state.selected = file.id;
     const requestId = ++state.detailsRequest;
     $$('.file-row').forEach(row => row.classList.toggle('selected', row.dataset.id === String(file.id)));
     $('#details-panel').hidden = false;
     $('#library-layout').classList.add('with-details');
-    renderDetails(file, null, true);
+    renderDetails(file, null, true, opening);
     try {
       const response = await api(`/api/file?id=${encodeURIComponent(file.id)}&text_offset=0&max_chars=10000`);
       if (state.closed || requestId !== state.detailsRequest) return;
@@ -491,11 +591,14 @@
       else renderDetails(file, { text_detail: error.message }, false);
     }
   }
-  function renderDetails(file, response, loading) {
+  function renderDetails(file, response, loading, focus = false) {
     state.detailsState = { file, response, loading };
-    const panel = $('#details-panel'); panel.replaceChildren();
+    const panel = $('#details-panel');
+    const keepFocus = panel.contains(document.activeElement);
+    const focusedAction = document.activeElement?.dataset?.detailAction || 'close';
+    panel.replaceChildren();
     const top = element('div', 'details-top'); top.append(element('span', '', t('DETALJI FAJLA')));
-    const close = element('button', 'icon-button'); close.setAttribute('aria-label', t('Zatvori detalje')); close.append(icon('close')); close.addEventListener('click', closeDetails); top.append(close);
+    const close = element('button', 'icon-button'); close.dataset.detailAction = 'close'; close.setAttribute('aria-label', t('Zatvori detalje')); close.append(icon('close')); close.addEventListener('click', closeDetails); top.append(close);
     panel.append(top, typeIcon(file, 'details-file-icon'), element('h3', 'details-name', file.name), element('div', 'details-type', `${extension(file).toUpperCase() || t('FAJL')} · ${fmtBytes(file.size)}`));
     const metadata = element('dl', 'detail-metadata');
     [[t('Medij'), file.source_label || '—'], [t('Lokacija'), file.location || t('Nije uneta')], [t('Izmenjeno'), fmtDate(file.modified)]].forEach(([label, value]) => {
@@ -503,10 +606,10 @@
     });
     panel.append(metadata, element('p', 'detail-path', file.path || file.relative_path || t('Putanja nije dostupna')));
     const actions = element('div', 'details-actions');
-    const openFile = element('button', 'button button-coral'); openFile.append(icon('arrow'), document.createTextNode(t('Otvori fajl'))); openFile.addEventListener('click', () => openOriginal(file.id, false));
-    const openFolder = element('button', 'button button-ghost'); openFolder.append(icon('folder'), document.createTextNode('Folder')); openFolder.addEventListener('click', () => openOriginal(file.id, true));
+    const openFile = element('button', 'button button-coral'); openFile.dataset.detailAction = 'open-file'; openFile.append(icon('arrow'), document.createTextNode(t('Otvori fajl'))); openFile.addEventListener('click', () => openOriginal(file.id, false));
+    const openFolder = element('button', 'button button-ghost'); openFolder.dataset.detailAction = 'open-folder'; openFolder.append(icon('folder'), document.createTextNode('Folder')); openFolder.addEventListener('click', () => openOriginal(file.id, true));
     actions.append(openFile, openFolder); panel.append(actions);
-    const copy = element('button', 'text-button details-copy'); copy.append(icon('copy', 'small'), document.createTextNode(t('Kopiraj putanju'))); copy.addEventListener('click', async () => {
+    const copy = element('button', 'text-button details-copy'); copy.dataset.detailAction = 'copy-path'; copy.append(icon('copy', 'small'), document.createTextNode(t('Kopiraj putanju'))); copy.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(file.path || file.relative_path || ''); toast(t('Putanja je kopirana.')); } catch { toast(t('Browser nije dozvolio kopiranje. Putanju možete označiti u detaljima.'), true); }
     }); panel.append(copy);
     panel.append(element('p', 'detail-note', t('Za otvaranje je potrebno da originalni medij bude priključen i putanja dostupna.')));
@@ -527,6 +630,7 @@
       preview.append(element('p', '', t(response?.text_detail || statusMessages[status] || 'Sadržaj nije indeksiran. Uključite indeksiranje dokumenata kada je medij dostupan.')));
     }
     panel.append(preview);
+    syncDetailsMode(focus || keepFocus, focusedAction);
   }
   async function openOriginal(id, folder) {
     try { await api('/api/open', { method: 'POST', body: { id, folder } }); toast(folder ? t('Folder je otvoren na ovom računaru.') : t('Fajl je poslat podrazumevanoj aplikaciji.')); } catch (error) { toast(error.message, true); }
@@ -700,6 +804,30 @@
     }
   });
   $('.brand').addEventListener('click', event => { event.preventDefault(); setView('search'); });
+  $('.skip-link').addEventListener('click', event => { event.preventDefault(); setView('search'); $('#search-input').focus(); });
+  $('#density-select').addEventListener('change', () => {
+    document.documentElement.dataset.density = $('#density-select').value;
+    savePreference('allfiles.density', $('#density-select').value);
+  });
+  $('#media-view-select').addEventListener('change', () => {
+    const value = $('#media-view-select').value;
+    document.documentElement.dataset.mediaView = $('#source-cards').dataset.mediaView = value;
+    $('#source-cards').scrollTop = 0;
+    savePreference('allfiles.mediaView', value);
+  });
+  $('#media-search').addEventListener('input', () => { renderMediaFilter(); $('#source-cards').scrollTop = 0; });
+  $('#media-kind-filter').addEventListener('change', () => { renderMediaFilter(); $('#source-cards').scrollTop = 0; });
+  $('#sidebar-sources').addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    const buttons = $$('.sidebar-source');
+    if (!buttons.length) return;
+    const index = buttons.indexOf(event.target.closest('.sidebar-source'));
+    if (index < 0) return;
+    event.preventDefault();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+    sidebarFocusId = buttons[next].dataset.sourceId;
+    updateSourceSelection(); buttons[next].focus({ preventScroll: true }); revealSidebarButton(buttons[next]);
+  });
   $('#search-input').addEventListener('input', () => searchChanged());
   $('#search-input').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); searchChanged(true); } });
   $('#clear-search').addEventListener('click', () => { $('#search-input').value = ''; searchChanged(true); $('#search-input').focus(); });
@@ -707,6 +835,9 @@
   $('#reset-filters').addEventListener('click', () => { $('#search-input').value = ''; $('#source-filter').value = ''; $('#ext-filter').value = ''; searchChanged(true); });
   $('#previous-page').addEventListener('click', () => changePage(-1));
   $('#next-page').addEventListener('click', () => changePage(1));
+  $('#first-page').addEventListener('click', () => goToPage(1));
+  $('#last-page').addEventListener('click', () => goToPage(Math.max(1, Math.ceil(state.total / state.limit))));
+  $('#page-jump-form').addEventListener('submit', event => { event.preventDefault(); goToPage($('#page-input').value); });
   $('#source-form').addEventListener('submit', event => submitForm(event, '#source-form-error', startScan));
   $('#import-form').addEventListener('submit', event => submitForm(event, '#import-form-error', startImport));
   $('#export-form').addEventListener('submit', event => submitForm(event, '#export-form-error', exportCatalog));
@@ -724,11 +855,22 @@
   });
   $('#confirm-shutdown').addEventListener('click', shutdown);
   document.addEventListener('keydown', event => {
+    if (detailsModal && !$('dialog[open]')) {
+      if (event.key === 'Escape') { event.preventDefault(); closeDetails(); }
+      else if (event.key === 'Tab') {
+        const focusable = detailsFocusable(), active = document.activeElement;
+        const first = focusable[0], last = focusable[focusable.length - 1];
+        if (event.shiftKey && (active === first || !$('#details-panel').contains(active))) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && (active === last || !$('#details-panel').contains(active))) { event.preventDefault(); first?.focus(); }
+      }
+      return;
+    }
     const typing = event.target.matches('input,textarea,select,[contenteditable=true]');
     if (event.key === '/' && !typing && !$('dialog[open]')) { event.preventDefault(); setView('search'); $('#search-input').focus(); }
     if (event.key === 'Escape' && !$('dialog[open]')) { if (state.selected !== null) closeDetails(); else if (event.target === $('#search-input')) event.target.blur(); }
   });
   window.addEventListener('hashchange', () => setView(location.hash.slice(1)));
+  window.addEventListener('resize', () => { if (state.selected !== null) syncDetailsMode(!detailsModal); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { if (!state.busy) clearTimeout(state.pollTimer); }
     else refreshStatus();
@@ -738,6 +880,7 @@
     if (!input.matches('input,select')) return;
     input.setCustomValidity('');
     if (input.validity.valueMissing) input.setCustomValidity(t('Unesite vrednost u ovo polje.'));
+    else if (input.id === 'page-input') input.setCustomValidity(t('Unesite broj stranice između 1 i {pages}.', { pages: i18n.formats.number.format(Math.max(1, Math.ceil(state.total / state.limit))) }));
     else if (input.validity.tooShort) input.setCustomValidity(t('Unesite najmanje {count} znakova.', { count: input.minLength }));
   }, true);
   document.addEventListener('input', event => { if (event.target.matches('input,select')) event.target.setCustomValidity(''); });
@@ -764,6 +907,10 @@
   });
 
   async function initialize() {
+    const density = preference('allfiles.density', ['compact', 'comfortable'], 'compact');
+    $('#density-select').value = document.documentElement.dataset.density = density;
+    const mediaView = preference('allfiles.mediaView', ['list', 'cards'], 'list');
+    $('#media-view-select').value = document.documentElement.dataset.mediaView = $('#source-cards').dataset.mediaView = mediaView;
     setView(location.hash.slice(1));
     try {
       const session = await api('/api/session');
