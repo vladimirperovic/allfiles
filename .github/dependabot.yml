@@ -1,7 +1,18 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: /
+    directories:
+      - /
+      - /experiments/rust-search
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /experiments/go-search
     schedule:
       interval: monthly
     open-pull-requests-limit: 3

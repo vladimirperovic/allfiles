@@ -2,7 +2,7 @@
 
 # AllFiles
 
-**Public release 0.1.5** · [Download](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) · [Browser demo](https://vladimirperovic.github.io/allfiles/) · [Documentation](docs/README.md) · [Changes](CHANGELOG.md) · [MIT license](LICENSE)
+**Public release 0.1.6** · [Download](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.6) · [Browser demo](https://vladimirperovic.github.io/allfiles/) · [Documentation](docs/README.md) · [Changes](CHANGELOG.md) · [MIT license](LICENSE)
 
 A portable catalog for files on your computers, external drives, Blu-ray discs and LTO tapes.
 
@@ -16,15 +16,15 @@ The application is designed for local use, including Omarchy Linux with its data
 
 ## Start the application
 
-Download an available archive for your computer from the [v0.1.5 release](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5), verify its SHA-256 checksum against the supplied checksums and extract it into your chosen folder. For Omarchy on an Intel/AMD computer, use `linux-amd64`. Mount your VeraCrypt container first if you use one. Historical 0.2.0 and 0.3.0 tags remain unchanged; their larger version numbers do not make them the current public package.
+Download an available archive for your computer from the [v0.1.6 release](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.6), verify its SHA-256 checksum against the supplied checksums and extract it into your chosen folder. For Omarchy on an Intel/AMD computer, use `linux-amd64`. Mount your VeraCrypt container first if you use one. Historical 0.2.0 and 0.3.0 tags remain unchanged; their larger version numbers do not make them the current public package.
 
-| System | Release 0.1.5 archive |
+| System | Release 0.1.6 archive |
 |---|---|
-| Windows Intel/AMD 64-bit | `allfiles-0.1.5-windows-amd64.zip` |
-| Linux Intel/AMD 64-bit | `allfiles-0.1.5-linux-amd64.tar.gz` |
-| Linux ARM64 | `allfiles-0.1.5-linux-arm64.tar.gz` |
-| macOS Apple Silicon | `allfiles-0.1.5-darwin-arm64.tar.gz` |
-| macOS Intel | `allfiles-0.1.5-darwin-amd64.tar.gz` |
+| Windows Intel/AMD 64-bit | `allfiles-0.1.6-windows-amd64.zip` |
+| Linux Intel/AMD 64-bit | `allfiles-0.1.6-linux-amd64.tar.gz` |
+| Linux ARM64 | `allfiles-0.1.6-linux-arm64.tar.gz` |
+| macOS Apple Silicon | `allfiles-0.1.6-darwin-arm64.tar.gz` |
+| macOS Intel | `allfiles-0.1.6-darwin-amd64.tar.gz` |
 
 The native CI Linux packages target Ubuntu 24.04 and glibc 2.39 or newer. Older systems may require a source build. Download `SHA256SUMS.txt` too and verify the complete archive hash before extraction. Packages are unsigned. Check the release page for actual availability and validation results.
 
@@ -223,11 +223,11 @@ mkdir -p demo-data
 
 Do not use the demo directory for your real catalog. `demo` seeds it and exits; `serve` opens the interface.
 
-## Public release 0.1.5 and upgrading
+## Public release 0.1.6 and upgrading
 
 The production build is **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. Existing Go source files are retained as a reference implementation and for compatibility checks; production builds use Cargo. See the [architecture](docs/ARCHITECTURE.md) for a module overview.
 
-**0.1.5 identifies this public release of the current Rust application.** Historical 0.2.0/0.3.0 tags and releases are unchanged; this smaller number does not mean a return to older Go code. The [changelog](CHANGELOG.md) describes this release.
+**0.1.6 identifies this public release of the current Rust application.** Historical 0.2.0/0.3.0 tags and releases are unchanged; this smaller number does not mean a return to older Go code. The [changelog](CHANGELOG.md) describes this release.
 
 Close the old application, back up the entire data directory, then run the new executable with the same `--data`. The catalog format and v1 encryption manifest remain compatible; changing the executable alone does not require reimporting. Rescan available originals with content enabled to refresh previously incomplete or corrected text extraction. The historical bidirectional encrypted-catalog checks between Go 0.2.0 and Rust 0.3.0 remain documented; current evidence is in [release validation](docs/VALIDATION.md).
 
@@ -253,7 +253,7 @@ Performance depends on the actual archive, disk, query and content. Short/common
 
 ## Historical measurements and remaining work
 
-Historical version 0.2.0 introduced transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removed redundant per-document writes during metadata import. It also bounded CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the [application benchmark history](https://github.com/vladimirperovic/allfiles/blob/main/experiments/application-history.md) preserves the paired before/after measurements and their scope. These historical version labels and samples have not been renumbered for public release 0.1.5.
+Historical version 0.2.0 introduced transactional catalog counters, index-driven content candidates, one snippet calculation per shared document per result page, bounded HTTP/MCP text pages, and removed redundant per-document writes during metadata import. It also bounded CSV/XML record allocation and shared import buffers. Explicit regression benchmarks are in `v0.2.0:review_benchmark_test.go`; the [application benchmark history](https://github.com/vladimirperovic/allfiles/blob/main/experiments/application-history.md) preserves the paired before/after measurements and their scope. These historical version labels and samples have not been renumbered for public release 0.1.6.
 
 Remaining work includes cursor pagination for very deep pages, reads that do not wait for an indexing transaction (one lock currently serializes requests), export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 

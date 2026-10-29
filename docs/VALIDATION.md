@@ -1,4 +1,10 @@
-# Validation of 0.1.5
+# Validation of 0.1.6
+
+Recorded on 2026-10-29. All 26 validation stages passed against the patched local Windows release, including **52/52 Rust tests**, **568/568 search checks**, **31/31 browser checks**, **11/11 recovery checks**, formatting, Clippy, extraction/import/storage regressions, Go tests/vet/race and encrypted compatibility. The two added Rust tests exercise XML attribute limits and malformed input. Existing 0.1.5 results and benchmark observations below remain historical measurements; they have not been relabeled as new performance runs.
+
+Additional security probes passed **18/18 application boundary checks** and **9/9 dependency-snapshot tests**. RustSec reports no vulnerabilities in either Cargo lockfile; the remaining PDF-library maintenance warning and the unreachable Go OpenPGP notice are explained in the [security review](SECURITY_REVIEW.md). Native release publication requires all five platform jobs to pass.
+
+## Previous release: 0.1.5
 
 Recorded on 2026-10-29. Tests use generated files and catalogs; no personal catalog is required or published. Results below describe the final local Windows x64 Rust build. The [native validation run](https://github.com/vladimirperovic/allfiles/actions/runs/40854555180) passed on all five targets: Linux x64/ARM64, macOS Intel/Apple Silicon and Windows x64. Each ran formatting, Clippy, Rust tests, a release build, HTTP/MCP smoke checks, synthetic regressions and archive verification. Release publication additionally requires all five native jobs to succeed for the release tag; follow [Build and test](https://github.com/vladimirperovic/allfiles/actions/workflows/build.yml) for that run.
 

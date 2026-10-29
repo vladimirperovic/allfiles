@@ -11,18 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.10'
           cache-dependency-path: |
             experiments/go-search/go.sum
       - name: Read the historical Go fixture generator
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: v0.2.0
+          ref: 0dd64232d3911fe016f0a9e23d8ed19127fb0834 # v0.2.0 fixture generator
           path: .tmp/go-reference
           persist-credentials: false
       - name: Configure temporary directories

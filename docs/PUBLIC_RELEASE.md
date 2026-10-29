@@ -1,6 +1,6 @@
-# Public release 0.1.5
+# Public release 0.1.6
 
-This release publishes the current Rust AllFiles application under the [MIT license](../LICENSE). The chosen public version is **0.1.5**, even though historical development tags include 0.2.0 and 0.3.0. Those tags, release artifacts and benchmark labels are not rewritten. Use the explicit [v0.1.5 release page](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) to select this public package.
+This release publishes the current Rust AllFiles application under the [MIT license](../LICENSE). The chosen public version is **0.1.6**, even though historical development tags include 0.2.0 and 0.3.0. Those tags, release artifacts and benchmark labels are not rewritten. Use the explicit [v0.1.6 release page](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.6) to select this public package.
 
 ## What is public
 
@@ -22,11 +22,11 @@ The production program still requires its local executable and existing `--data`
 
 | Archive | Executable | Target |
 |---|---|---|
-| `allfiles-0.1.5-windows-amd64.zip` | `allfiles-windows-amd64.exe` | Windows Intel/AMD |
-| `allfiles-0.1.5-linux-amd64.tar.gz` | `allfiles-linux-amd64` | Linux Intel/AMD, including Omarchy |
-| `allfiles-0.1.5-linux-arm64.tar.gz` | `allfiles-linux-arm64` | Linux ARM64 |
-| `allfiles-0.1.5-darwin-arm64.tar.gz` | `allfiles-darwin-arm64` | macOS Apple Silicon |
-| `allfiles-0.1.5-darwin-amd64.tar.gz` | `allfiles-darwin-amd64` | macOS Intel |
+| `allfiles-0.1.6-windows-amd64.zip` | `allfiles-windows-amd64.exe` | Windows Intel/AMD |
+| `allfiles-0.1.6-linux-amd64.tar.gz` | `allfiles-linux-amd64` | Linux Intel/AMD, including Omarchy |
+| `allfiles-0.1.6-linux-arm64.tar.gz` | `allfiles-linux-arm64` | Linux ARM64 |
+| `allfiles-0.1.6-darwin-arm64.tar.gz` | `allfiles-darwin-arm64` | macOS Apple Silicon |
+| `allfiles-0.1.6-darwin-amd64.tar.gz` | `allfiles-darwin-amd64` | macOS Intel |
 
 This table describes target names, not a claim that every artifact is available or tested. Local Windows runtime/browser/integration checks are recorded in [VALIDATION.md](VALIDATION.md). The native CI matrix must be judged by its individual completed runs. A compiled artifact alone is not evidence of runtime behavior on another device. Current packages are unsigned.
 
@@ -62,6 +62,6 @@ The tag-triggered release workflow waits for the five native jobs, collects thei
 4. Review the exact staged files and archive contents for personal data, secrets, temporary paths and generated artifacts that do not belong in source control. Keep MIT and dependency notices in distributed packages.
 5. Verify each package's platform and checksum. Record local validation separately from CI results; do not label pending matrix jobs as passed.
 6. Check the deployed demo URL, direct dashboard entry, fictional labels, media counts and absence of calls to a real local backend. Check the download links after publication.
-7. Publish the intended commit as `v0.1.5` without moving existing historical tags. Confirm the repository, release assets and demo are accessible publicly, and update the validation record with actual outcomes.
+7. Publish the intended commit as `v0.1.6` without moving existing historical tags. Confirm the repository, release assets and demo are accessible publicly, and update the validation record with actual outcomes.
 
 For a functional problem, request a small synthetic reproduction through [Issues](https://github.com/vladimirperovic/allfiles/issues). Security reports follow [SECURITY.md](../SECURITY.md); do not request private catalogs, documents or passwords.

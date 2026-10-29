@@ -739,12 +739,18 @@ fn xml(
                     frame.folder = parent.folder.clone();
                     frame.inherited_folder = parent.folder.clone();
                 }
-                for attr in e.attributes() {
-                    let a = attr?;
-                    if frame.fields.len() >= 256 {
+                for (attribute_index, attr) in e.attributes().enumerate() {
+                    scanner::check(cancel)?;
+                    // Count raw attributes: distinct namespace prefixes may
+                    // normalize to the same field key.
+                    if attribute_index >= 256 {
                         bail!("XML attribute count exceeds limit");
                     }
-                    let value = a.unescape_value()?.into_owned();
+                    let a = attr?;
+                    // Keep literal whitespace in catalog paths while decoding
+                    // entities; XML attribute normalization would change it.
+                    let value =
+                        quick_xml::escape::unescape(std::str::from_utf8(&a.value)?)?.into_owned();
                     if value.len() > 1 << 20 {
                         bail!("XML field exceeds 1 MiB limit");
                     }
@@ -883,6 +889,43 @@ mod tests {
             Ok(())
         })?;
         Ok(records)
+    }
+
+    #[test]
+    fn xml_attribute_limit_counts_prefixed_names_before_normalization() -> Result<()> {
+        for count in [255, 256, 10_000] {
+            let attributes = (0..count)
+                .map(|i| format!(" p{i}:ignored='x'"))
+                .collect::<String>();
+            let input = format!("<catalog><file name='safe.txt'{attributes}/></catalog>");
+            let result = xml_records(&input);
+            if count == 255 {
+                let records = result?;
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].file.relative, "safe.txt");
+            } else {
+                assert!(
+                    result
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("attribute count"),
+                    "{count} prefixed attributes must not bypass the raw limit"
+                );
+            }
+        }
+        assert!(xml_records("<catalog><file name='one.txt' name='two.txt'/></catalog>").is_err());
+        for path in [
+            "Folder\tA/one &amp; two.txt",
+            "Folder&#9;A/one &amp; two.txt",
+        ] {
+            let input = format!("<catalog><file fullpath='{path}'/></catalog>");
+            assert_eq!(
+                xml_records(&input)?[0].file.relative,
+                "Folder\tA/one & two.txt"
+            );
+        }
+        Ok(())
     }
 
     #[test]

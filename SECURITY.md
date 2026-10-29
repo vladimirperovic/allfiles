@@ -34,4 +34,6 @@ The supported formats and exact limits are in the [user guide](README.en.md#add-
 
 ## Downloads
 
-Use assets linked from the [official repository releases](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.5) and verify the published SHA-256 checksums. Checksums detect a mismatched download; they are not a substitute for a trusted source or a digital signature. Current packages are unsigned. Dependency licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+The [security review](docs/SECURITY_REVIEW.md) records the 0.1.6 XML fixes and the scope of dependency, code and application checks. The security workflow checks both Rust lockfiles and both Go modules and refreshes GitHub's dependency inventory from the committed source. Informational maintenance warnings remain visible; they are not silently ignored.
+
+Use assets linked from the [official repository releases](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.6) and verify the published SHA-256 checksums. Checksums detect a mismatched download; they are not a substitute for a trusted source or a digital signature. Current packages are unsigned. Dependency licenses are listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

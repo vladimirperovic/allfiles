@@ -1,0 +1,131 @@
+name: Dependency security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-audit:
+    name: Rust advisory audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned audit tool
+        id: install-audit
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.99.1 install cargo-audit --version 0.22.2 --locked
+      # Informational advisories remain visible. Vulnerabilities fail the job;
+      # none are ignored or hidden behind a successful dependency snapshot.
+      - name: Audit application dependencies
+        run: cargo +1.99.1 audit --file Cargo.lock
+      - name: Audit Rust comparison dependencies
+        if: ${{ !cancelled() && steps.install-audit.outcome == 'success' }}
+        run: cargo +1.99.1 audit --file experiments/rust-search/Cargo.lock
+
+  go-audit:
+    name: Go vulnerability audit (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: reference application
+            directory: .
+            tags: ''
+          - name: comparison pure Go
+            directory: experiments/go-search
+            tags: ''
+          - name: comparison native SQLite
+            directory: experiments/go-search
+            tags: native
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: |
+            go.sum
+            experiments/go-search/go.sum
+      - name: Install pinned vulnerability checker
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+      - name: Check reachable vulnerable code
+        env:
+          GOVULNCHECK_TAGS: ${{ matrix.tags }}
+        run: |
+          if [ -n "$GOVULNCHECK_TAGS" ]; then
+            govulncheck -tags "$GOVULNCHECK_TAGS" ./...
+          else
+            govulncheck ./...
+          fi
+
+  snapshot-tests:
+    name: Dependency snapshot tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Test snapshot generation
+        run: python -m unittest discover -s scripts -p test_dependency_snapshot.py
+
+  dependency-inventory:
+    name: Refresh GitHub dependency graph
+    # Untrusted pull requests never receive a token with repository write access.
+    # Advisory failures must not prevent reporting the actual dependency graph.
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && github.repository == 'vladimirperovic/allfiles' }}
+    needs: snapshot-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Generate snapshot from committed lockfiles
+        run: python scripts/dependency-snapshot.py --sha "$GITHUB_SHA" --ref "$GITHUB_REF" --output .tmp/dependency-snapshot.json
+      - name: Submit and verify dependency snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/dependency-graph/snapshots" \
+            --input .tmp/dependency-snapshot.json > .tmp/dependency-submission-response.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          response = json.loads(Path('.tmp/dependency-submission-response.json').read_text())
+          if response.get('result') != 'SUCCESS' or not isinstance(response.get('id'), int) or response['id'] <= 0:
+              raise SystemExit('Dependency submission did not confirm SUCCESS: ' + json.dumps(response))
+          print('GitHub confirmed dependency snapshot', response['id'])
+          PY

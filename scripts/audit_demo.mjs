@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(require.resolve('playwright-core', { paths: [process.cwd(), resolve('.tmp/ui')] }));
+const expectedVersion = (await readFile(resolve('VERSION'), 'utf8')).trim();
 const directory = resolve(process.argv[2] || 'dist/pages');
 const output = resolve(process.argv[3] || 'audit/2026-10-29/demo');
 await mkdir(output, { recursive: true });
@@ -136,7 +137,7 @@ try {
   await page.reload({ waitUntil: 'networkidle' });
   const migration = await page.evaluate(() => ({ language: document.documentElement.lang, defaultApplied: localStorage.getItem('allfiles.demo.language-default.en.v1'), savedLanguage: localStorage.getItem('allfiles.language') }));
   record('previous Serbian demo sessions migrate to English once', migration.language === 'en' && migration.defaultApplied === '1' && migration.savedLanguage === 'en', migration);
-  record('language switching translates both dashboard and demo guidance', serbianWorks && await page.locator('#connection-status').innerText() === 'Browser demo' && (await page.locator('#demo-description').innerText()).includes('1 LTO tape, 3 Blu-ray discs and 3 drives') && (await page.locator('#version-label').innerText()).includes('0.1.5'), { banner: await page.locator('#demo-description').innerText(), version: await page.locator('#version-label').innerText() });
+  record('language switching translates both dashboard and demo guidance', serbianWorks && await page.locator('#connection-status').innerText() === 'Browser demo' && (await page.locator('#demo-description').innerText()).includes('1 LTO tape, 3 Blu-ray discs and 3 drives') && (await page.locator('#version-label').innerText()).includes(expectedVersion), { banner: await page.locator('#demo-description').innerText(), version: await page.locator('#version-label').innerText() });
   await page.screenshot({ path: join(output, 'demo-dashboard-en.png'), fullPage: true });
   await page.screenshot({ path: join(output, 'demo-dashboard.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

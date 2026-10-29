@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.6 — Security maintenance — 2026-10-29
+
+- Updated `quick-xml` to 0.41.0, fixing RUSTSEC-2026-0194 and RUSTSEC-2026-0195. AllFiles uses the plain reader; its attribute iteration was affected by the first advisory.
+- XML imports and XLSX cells now reject more than 256 raw attributes per element and check cancellation during iteration. Different namespace prefixes can no longer bypass the import limit by collapsing into one normalized field name. Duplicate-attribute validation remains enabled.
+- Added regression tests for oversized attribute lists, the accepted boundary, duplicate attributes and XML path compatibility. Catalog formats and encryption remain compatible.
+- Added automated RustSec/Go vulnerability checks and committed dependency snapshots for GitHub, expanded Dependabot to the experimental manifests, and pinned the remaining comparison workflow actions.
+- Retained ZIP 9.0.5 and explicit archive header-consistency validation. See the [security review](docs/SECURITY_REVIEW.md) for findings, scope and remaining maintenance warnings.
+
 ## 0.1.5 — Public release — 2026-10-29
 
 This is the public release of the current Rust application. The version was deliberately set to **0.1.5** for this release. Historical 0.2.0 and 0.3.0 tags, releases and benchmark labels remain unchanged; the smaller number does not indicate older application code or a return to Go.

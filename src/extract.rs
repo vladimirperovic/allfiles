@@ -522,10 +522,15 @@ fn sheet(bytes: &[u8], shared: &[String], sink: &mut Sink, cancel: &AtomicBool) 
                     raw_text.clear();
                     in_value = false;
                     in_text = false;
-                    for a in e.attributes() {
+                    for (attribute_index, a) in e.attributes().enumerate() {
+                        check(cancel)?;
+                        if attribute_index >= 256 {
+                            bail!("XML attribute count exceeds limit");
+                        }
                         let a = a?;
                         if a.key.local_name().as_ref() == b"t" {
-                            kind = a.unescape_value()?.into_owned();
+                            kind = quick_xml::escape::unescape(std::str::from_utf8(&a.value)?)?
+                                .into_owned();
                         }
                     }
                 }
@@ -596,6 +601,39 @@ fn sheet(bytes: &[u8], shared: &[String], sink: &mut Sink, cancel: &AtomicBool) 
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+
+    #[test]
+    fn xlsx_cell_attributes_are_bounded_before_normalizing_names() -> Result<()> {
+        let cancel = AtomicBool::new(false);
+        for count in [255, 256, 10_000] {
+            let attributes = (0..count)
+                .map(|i| format!(" p{i}:ignored='x'"))
+                .collect::<String>();
+            let input = format!(
+                "<worksheet><row><c t='str'{attributes}><v>Safe value</v></c></row></worksheet>"
+            );
+            let mut sink = Sink::new();
+            let result = sheet(input.as_bytes(), &[], &mut sink, &cancel);
+            if count == 255 {
+                result?;
+                assert_eq!(sink.text.trim(), "Safe value");
+            } else {
+                assert!(result.unwrap_err().to_string().contains("attribute count"));
+                assert!(sink.text.is_empty());
+            }
+        }
+        let mut sink = Sink::new();
+        assert!(
+            sheet(
+                b"<worksheet><c t='str' t='str'><v>Rejected</v></c></worksheet>",
+                &[],
+                &mut sink,
+                &cancel,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     fn office_zip_fixture(
         method: zip::CompressionMethod,
