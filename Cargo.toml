@@ -19,7 +19,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 flate2 = "1"
 sha2 = "0.10"
 hkdf = "0.12"
-argon2 = "0.5"
+argon2 = "0.6"
 base64 = "0.22"
 hex = "0.4"
 getrandom = "0.3"
