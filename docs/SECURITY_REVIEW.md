@@ -10,6 +10,8 @@ This discrepancy was in GitHub's indexed inventory, not in the release lockfile.
 
 GitHub documents that submitted dependency inventories take precedence over static parsing and receive normal vulnerability alerts. See [dependency submission](https://docs.github.com/en/rest/dependency-graph/dependency-submission). Alerts are resolved by correcting their dependency evidence, not by dismissing them or excluding the vulnerable package.
 
+GitHub now lists ZIP 9.0.5 and `quick-xml` 0.41.0. ZIP alert #1 changed to **fixed**, with no dismissal recorded, and the open Dependabot alert count is zero. Its fix timestamp (11:30:05 UTC) preceded the first confirmed explicit snapshot (11:30:31 UTC): the new manifest push had already refreshed the static index. Snapshot submission adds a verifiable inventory refresh for subsequent runs; it is not claimed as the cause of that earlier state change. The first security workflow completed successfully, including both Rust lockfiles, all three Go configurations and the inventory submission.
+
 ## Corrected XML processing
 
 [`RUSTSEC-2026-0194`](https://rustsec.org/advisories/RUSTSEC-2026-0194.html) describes quadratic work when checking duplicate XML attributes. AllFiles reached that iterator in XML imports and XLSX extraction. The previous import limit counted normalized fields, so distinct prefixed attribute names could collapse to the same key and evade that limit.
@@ -21,6 +23,8 @@ ZIP remains pinned to 9.0.5 with `validate_header_consistency()` enabled before 
 ## Checks and maintenance warnings
 
 RustSec is checked against both lockfiles. Go vulnerability analysis covers both modules and distinguishes modules present in the dependency graph from packages/symbols actually used. The security workflow does not ignore vulnerability IDs. GitHub CodeQL extended analysis and secret scanning provide separate checks; a successful workflow alone is not a statement that its alert list is empty.
+
+CodeQL uses the extended query suite with both remote and local input sources. Findings are reviewed at their exact source locations and dataflow paths. Synthetic passwords inside Rust test-only modules are classified as test data; explicit developer-selected paths, test executables and benchmark SQL are assessed against their intended local interfaces. Runtime FFI findings are checked against the actual output writes, null/error guards and library lifetime contracts. These reviews do not add blanket query exclusions or weaken the application checks. The Go reference tests also run on Linux so symbolic-link containment is exercised even when Windows cannot create test links.
 
 Two maintenance findings remain visible:
 

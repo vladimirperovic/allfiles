@@ -62,6 +62,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        id: setup-go
         with:
           go-version: '1.26.10'
           cache-dependency-path: |
@@ -78,6 +79,9 @@ jobs:
           else
             govulncheck ./...
           fi
+      - name: Test the Go reference on Linux, including symlink boundaries
+        if: ${{ !cancelled() && matrix.directory == '.' && steps.setup-go.outcome == 'success' }}
+        run: go test -v ./... -count=1
 
   snapshot-tests:
     name: Dependency snapshot tests
