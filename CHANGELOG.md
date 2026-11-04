@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed filename and folder search for names stored in decomposed Unicode (NFD), which macOS and Mac-formatted media commonly use. Such names containing `č`, `ć`, `š` or `ž` were not found by either `račun` or `racun`; both now match. Existing catalogs refresh their stored search names once when opened, and remain readable by 0.1.6.
+
 ## 0.1.6 — Security maintenance — 2026-10-29
 
 - Updated `quick-xml` to 0.41.0, fixing RUSTSEC-2026-0194 and RUSTSEC-2026-0195. AllFiles uses the plain reader; its attribute iteration was affected by the first advisory.

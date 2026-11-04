@@ -1210,3 +1210,89 @@ fn storage_ascii_snippets_preserve_unicode61_boundaries() -> anyhow::Result<()> 
     }
     Ok(())
 }
+
+#[test]
+fn decomposed_mac_names_are_searchable_and_old_catalogs_refold() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://mac".into(),
+        ..Default::default()
+    })?;
+    // macOS commonly returns decomposed names: "c" + U+030C instead of "č".
+    let dir = "S\u{30C}ifre";
+    let name = "Rac\u{30C}un za struju.pdf";
+    let file = ScannedFile {
+        relative: format!("{dir}/{name}"),
+        name: name.into(),
+        dir: dir.into(),
+        ..entry(name)
+    };
+    s.upsert(&source.id, "scan", &[file, entry("C\u{301}evapi.txt")])?;
+    let names = |s: &mut Store, query: &str| -> anyhow::Result<Vec<String>> {
+        Ok(s.search(SearchOptions {
+            query: query.into(),
+            ..Default::default()
+        })?
+        .results
+        .into_iter()
+        .map(|f| f.name)
+        .collect())
+    };
+    for query in ["račun", "racun", "Rac\u{30C}un", "šifre", "sifre"] {
+        assert_eq!(names(&mut s, query)?, [name], "{query}");
+    }
+    for query in ["ćevapi", "cevapi"] {
+        assert_eq!(names(&mut s, query)?, ["C\u{301}evapi.txt"], "{query}");
+    }
+    assert_eq!(fold(name), fold("Račun za struju.pdf"));
+
+    // Simulate a catalog written before NFC folding, then reopen it.
+    let rows = s
+        .conn
+        .prepare("SELECT id,name FROM files")?
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, name) in rows {
+        s.conn.execute(
+            "UPDATE files SET search_name=? WHERE id=?",
+            rusqlite::params![name.to_lowercase(), id],
+        )?;
+    }
+    let (dir_id, folded): (i64, String) = s.conn.query_row(
+        "SELECT id,search_path FROM directories WHERE path=?",
+        [dir],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    s.conn.execute(
+        "INSERT INTO paths(paths,rowid,search_path) VALUES('delete',?,?)",
+        rusqlite::params![dir_id, folded],
+    )?;
+    s.conn.execute(
+        "UPDATE directories SET search_path=? WHERE id=?",
+        rusqlite::params![dir.to_lowercase(), dir_id],
+    )?;
+    s.conn.execute(
+        "INSERT INTO paths(rowid,search_path) VALUES(?,?)",
+        rusqlite::params![dir_id, dir.to_lowercase()],
+    )?;
+    s.conn
+        .execute("DELETE FROM meta WHERE key='search_fold'", [])?;
+    for query in ["racun", "sifre", "cevapi"] {
+        assert!(names(&mut s, query)?.is_empty(), "{query}");
+    }
+    drop(s);
+    let mut upgraded = Store::open(temp.path(), "")?;
+    for query in ["račun", "racun", "šifre", "sifre"] {
+        assert_eq!(names(&mut upgraded, query)?, [name], "{query}");
+    }
+    assert_eq!(names(&mut upgraded, "cevapi")?, ["C\u{301}evapi.txt"]);
+    // FTS5 reports an error when an external-content index no longer matches its table.
+    upgraded
+        .conn
+        .execute("INSERT INTO names(names) VALUES('integrity-check')", [])?;
+    upgraded
+        .conn
+        .execute("INSERT INTO paths(paths) VALUES('integrity-check')", [])?;
+    Ok(())
+}

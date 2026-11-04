@@ -23,8 +23,11 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use unicode_normalization::UnicodeNormalization;
 
 pub const MAX_TEXT: usize = 8 << 20;
+// Version of fold() used for stored search_name/search_path values.
+const SEARCH_FOLD: &str = "2";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 // Decode only the requested character page plus one lookahead character.
 // The decompressed document never needs to be materialized for the details panel.
@@ -83,7 +86,9 @@ pub fn fold(s: &str) -> String {
         return lower;
     }
     let mut out = String::with_capacity(lower.len());
-    for c in lower.chars() {
+    // macOS commonly stores names decomposed (NFD: "c" + U+030C for "č").
+    // Compose first so both forms fold to the same searchable text.
+    for c in lower.nfc() {
         match c {
             'č' | 'ć' => out.push('c'),
             'š' => out.push('s'),
@@ -287,6 +292,63 @@ fn initialize_stats(conn: &mut Connection) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
+// Recompute stored search names once after fold() changes. Earlier versions
+// left decomposed macOS names (NFD) unsearchable by both "račun" and "racun".
+fn refold_names(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+    let version: Option<String> = tx
+        .query_row("SELECT value FROM meta WHERE key='search_fold'", [], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    if version.as_deref() == Some(SEARCH_FOLD) {
+        return Ok(());
+    }
+    // ASCII-only names fold the same way in every version.
+    let non_ascii = "*[^\u{1}-\u{7f}]*";
+    let stale = |sql: &str| -> Result<Vec<(i64, String, String)>> {
+        let mut changed = Vec::new();
+        let mut statement = tx.prepare(sql)?;
+        let mut rows = statement.query([non_ascii])?;
+        while let Some(row) = rows.next()? {
+            let (id, value, stored): (i64, String, String) =
+                (row.get(0)?, row.get(1)?, row.get(2)?);
+            let folded = fold(&value);
+            if folded != stored {
+                changed.push((id, stored, folded));
+            }
+        }
+        Ok(changed)
+    };
+    // The files_au trigger keeps the external-content name index in step.
+    for (id, _, folded) in stale("SELECT id,name,search_name FROM files WHERE name GLOB ?")? {
+        tx.execute(
+            "UPDATE files SET search_name=? WHERE id=?",
+            params![folded, id],
+        )?;
+    }
+    for (id, old, folded) in stale("SELECT id,path,search_path FROM directories WHERE path GLOB ?")?
+    {
+        tx.execute(
+            "INSERT INTO paths(paths,rowid,search_path) VALUES('delete',?,?)",
+            params![id, old],
+        )?;
+        tx.execute(
+            "UPDATE directories SET search_path=? WHERE id=?",
+            params![folded, id],
+        )?;
+        tx.execute(
+            "INSERT INTO paths(rowid,search_path) VALUES(?,?)",
+            params![id, folded],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO meta(key,value) VALUES('search_fold',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [SEARCH_FOLD],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
 impl Store {
     pub fn open(dir: &Path, password: &str) -> Result<Self> {
         let dir = dunce::canonicalize(dir).context("Direktorijum podataka mora već postojati")?;
@@ -375,6 +437,7 @@ impl Store {
                 r.get(0)
             })?;
         initialize_stats(&mut conn)?;
+        refold_names(&mut conn)?;
         conn.execute(
             "UPDATE sources SET status='interrupted' WHERE status='scanning'",
             [],

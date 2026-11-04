@@ -84,6 +84,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "unicode-normalization",
  "url",
  "walkdir",
  "zeroize",
