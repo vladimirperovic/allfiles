@@ -40,7 +40,7 @@ One process owns a catalog directory. SQLite uses rollback journals, `synchronou
 
 ## Work, requests and cancellation
 
-The shared store is serialized by a mutex. Filesystem traversal and text extraction happen outside that lock where possible; updates use bounded batches. Scan/import jobs publish progress independently. Cancelling preserves committed work and avoids final stale-file cleanup for an incomplete scan.
+The shared store is serialized by a mutex. Filesystem traversal and text extraction happen outside that lock where possible; updates use bounded batches. Up to four worker threads extract document text in parallel (one for `bluray` and `lto` media); the scan thread reports progress and records their results in bounded groups. Cancellation stops workers from taking new files. Scan/import jobs publish progress independently. Cancelling preserves committed work and avoids final stale-file cleanup for an incomplete scan.
 
 `/api/status` carries an `instance_id` and monotonic `job_revision`. Accepted jobs return their initial job and revision together. The interface uses these values and local request epochs to reject late responses, identify restarts and avoid reconnecting after intentional shutdown.
 
@@ -56,6 +56,6 @@ The service checks Host/Origin and uses a session token for mutating requests. T
 
 Adiantum encrypts database storage through a VFS without an unencrypted working database. Manifest v1 uses Argon2id (3 passes, 64 MiB, parallelism 4), a random salt and HKDF-SHA256 keys for the two databases. Encryption protects confidentiality at rest, not authenticity. The manifest and password are both required; an encrypted copy does not remove the original unencrypted copy.
 
-Input documents are limited to 256 MiB, extracted UTF-8 text to 8 MiB, expanded Office XML to 32 MiB per part/64 MiB total, and PDF traversal to 20,000 pages. Import has additional record/token and shared-buffer limits. PDF parsing still runs in-process, so these are not strict process memory/time limits. See the [user guide](../README.en.md) and [security policy](../SECURITY.md).
+Input documents are limited to 256 MiB, extracted UTF-8 text to 8 MiB, expanded Office XML to 32 MiB per part/64 MiB total, and PDF traversal to 20,000 pages. Import has additional record/token and shared-buffer limits. PDF parsing still runs in-process, up to four documents at once, so these are not strict process memory/time limits. See the [user guide](../README.en.md) and [security policy](../SECURITY.md).
 
 Independent read connections, cursor pagination, export progress/cancellation and isolated document parsing remain possible future changes. They must preserve encrypted-format compatibility, coherent job/status behavior and bounded resource use.

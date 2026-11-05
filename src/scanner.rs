@@ -10,6 +10,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
+        mpsc,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -80,6 +81,7 @@ pub fn scan(
         options.kind = "computer".into();
     }
     let source = store.lock().unwrap().begin_scan(&options)?;
+    let workers = extraction_workers(&options.kind);
     let mut state = Progress {
         id: crypto::random_id(),
         status: "running".into(),
@@ -159,6 +161,7 @@ pub fn scan(
                     &mut batch,
                     &mut state,
                     options.index_content,
+                    workers,
                     cancel,
                     report,
                 )?;
@@ -171,6 +174,7 @@ pub fn scan(
             &mut batch,
             &mut state,
             options.index_content,
+            workers,
             cancel,
             report,
         )?;
@@ -189,6 +193,39 @@ pub fn scan(
         .finish_scan(&source.id, &state.id, result.is_ok());
     result.and(finish)
 }
+// Text extraction is mostly CPU work (PDF and Office parsing), so disks and
+// folders use several workers. Optical discs and tapes are read one file at a
+// time: parallel reads would make the drive seek between files.
+pub fn extraction_workers(kind: &str) -> usize {
+    if matches!(kind, "bluray" | "lto") {
+        return 1;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get().clamp(1, 4))
+}
+enum Extraction {
+    Started(String),
+    Done(IndexedFile, Result<extract::Extracted>),
+}
+fn extract_current(
+    root: &Path,
+    item: &IndexedFile,
+    cancel: &AtomicBool,
+) -> Result<extract::Extracted> {
+    let path: PathBuf = root.join(&item.relative);
+    Ok(match fs::symlink_metadata(&path) {
+        Ok(meta) => {
+            let (seconds, ns) = modified(&meta)?;
+            if file_version(i64::try_from(meta.len())?, seconds, ns) != item.version {
+                extract::Extracted::error(
+                    "File changed after metadata scanning; scan again to index its current contents.",
+                )
+            } else {
+                extract::extract(&path, cancel)
+            }
+        }
+        Err(e) => extract::Extracted::error(e.to_string()),
+    })
+}
 #[allow(clippy::too_many_arguments)] // A batch shares the scan's state and cancellation token.
 fn flush(
     store: &SharedStore,
@@ -197,6 +234,7 @@ fn flush(
     batch: &mut Vec<ScannedFile>,
     state: &mut Progress,
     index_content: bool,
+    workers: usize,
     cancel: &AtomicBool,
     report: &dyn Fn(Progress),
 ) -> Result<()> {
@@ -209,44 +247,66 @@ fn flush(
     batch.clear();
     if index_content {
         state.phase = "extracting".into();
-        // Extract without holding the store lock and commit documents in groups,
-        // bounded by count, text size and time so progress persists regularly.
-        let mut pending = Vec::new();
-        let (mut bytes, mut since) = (0, Instant::now());
-        for item in indexed {
-            check(cancel)?;
-            if !item.needs_text {
-                continue;
-            }
-            state.current = item.relative.clone();
-            report(state.clone());
-            let path: PathBuf = root.join(&item.relative);
-            let extracted = match fs::symlink_metadata(&path) {
-                Ok(meta) => {
-                    let (seconds, ns) = modified(&meta)?;
-                    if file_version(i64::try_from(meta.len())?, seconds, ns) != item.version {
-                        extract::Extracted::error(
-                            "File changed after metadata scanning; scan again to index its current contents.",
-                        )
-                    } else {
-                        extract::extract(&path, cancel)
+        let todo = indexed
+            .into_iter()
+            .filter(|item| item.needs_text)
+            .collect::<Vec<_>>();
+        let workers = workers.clamp(1, todo.len().max(1));
+        let queue = Mutex::new(todo.into_iter());
+        let (sender, results) = mpsc::sync_channel::<Extraction>(workers * 2);
+        // Extract without holding the store lock. Workers parse documents in
+        // parallel; this thread reports progress and commits documents in
+        // groups bounded by count, text size and time.
+        std::thread::scope(|scope| -> Result<()> {
+            // Owned here so an early return drops it and stops waiting workers.
+            let results = results;
+            for _ in 0..workers {
+                let (sender, queue) = (sender.clone(), &queue);
+                scope.spawn(move || {
+                    while !cancel.load(Ordering::Relaxed) {
+                        let Some(item) = queue.lock().unwrap().next() else {
+                            break;
+                        };
+                        if sender
+                            .send(Extraction::Started(item.relative.clone()))
+                            .is_err()
+                        {
+                            break;
+                        }
+                        let extracted = extract_current(root, &item, cancel);
+                        if sender.send(Extraction::Done(item, extracted)).is_err() {
+                            break;
+                        }
                     }
+                });
+            }
+            drop(sender);
+            let mut pending = Vec::new();
+            let (mut bytes, mut since) = (0, Instant::now());
+            for message in results.iter() {
+                check(cancel)?;
+                let (item, extracted) = match message {
+                    Extraction::Started(relative) => {
+                        state.current = relative;
+                        report(state.clone());
+                        continue;
+                    }
+                    Extraction::Done(item, extracted) => (item, extracted?),
+                };
+                if matches!(extracted.status.as_str(), "indexed" | "truncated") {
+                    state.indexed += 1;
                 }
-                Err(e) => extract::Extracted::error(e.to_string()),
-            };
+                bytes += extracted.text.len();
+                pending.push((item, extracted));
+                if pending.len() >= 256 || bytes >= 16 << 20 || since.elapsed() >= COMMIT_INTERVAL {
+                    record(store, &mut pending)?;
+                    (bytes, since) = (0, Instant::now());
+                }
+                report(state.clone());
+            }
             check(cancel)?;
-            if matches!(extracted.status.as_str(), "indexed" | "truncated") {
-                state.indexed += 1;
-            }
-            bytes += extracted.text.len();
-            pending.push((item, extracted));
-            if pending.len() >= 256 || bytes >= 16 << 20 || since.elapsed() >= COMMIT_INTERVAL {
-                record(store, &mut pending)?;
-                (bytes, since) = (0, Instant::now());
-            }
-            report(state.clone());
-        }
-        record(store, &mut pending)?;
+            record(store, &mut pending)
+        })?;
     }
     state.phase = "scanning".into();
     report(state.clone());

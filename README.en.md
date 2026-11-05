@@ -100,7 +100,7 @@ The default **Compact** view uses Explorer-style rows to show more files at once
 | Image-only scanned PDF | Metadata only; OCR is not included |
 | Legacy DOC, XLS, PPT | Metadata only in this version |
 
-Extraction does not reproduce document layout, images or every embedded object. Protected, damaged and unsupported documents remain in the catalog even when text extraction fails. Limits are 256 MiB per input document, 8 MiB of extracted UTF-8 text, 32 MiB per expanded Office XML part, 64 MiB of expanded Office XML in total, and 20,000 PDF pages. File details show when text is truncated. These are not strict memory or time limits for the PDF parser.
+Extraction does not reproduce document layout, images or every embedded object. Protected, damaged and unsupported documents remain in the catalog even when text extraction fails. Limits are 256 MiB per input document, 8 MiB of extracted UTF-8 text, 32 MiB per expanded Office XML part, 64 MiB of expanded Office XML in total, and 20,000 PDF pages. File details show when text is truncated. These are not strict memory or time limits for the PDF parser. Folders, computers and external disks extract up to four documents at a time (one per available processor core); Blu-ray and LTO media are read one file at a time so the drive does not seek between files.
 
 An LTO tape must be available as a mounted filesystem or through a supported catalog export. AllFiles does not control a tape drive or decode proprietary backup formats.
 

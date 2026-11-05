@@ -1296,3 +1296,98 @@ fn decomposed_mac_names_are_searchable_and_old_catalogs_refold() -> anyhow::Resu
         .execute("INSERT INTO paths(paths) VALUES('integrity-check')", [])?;
     Ok(())
 }
+
+#[test]
+fn parallel_extraction_matches_one_reader_and_stops_on_cancel() -> anyhow::Result<()> {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    assert_eq!(crate::scanner::extraction_workers("bluray"), 1);
+    assert_eq!(crate::scanner::extraction_workers("lto"), 1);
+    assert!((1..=4).contains(&crate::scanner::extraction_workers("computer")));
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("files");
+    fs::create_dir(&root)?;
+    for i in 0..300 {
+        fs::write(
+            root.join(format!("doc-{i:03}.txt")),
+            format!("dokument{i} {}", "tekst ".repeat(i % 7 + 1)),
+        )?;
+    }
+    fs::write(root.join("slika.bin"), [0u8, 1, 2])?;
+    let documents = |kind: &str| -> anyhow::Result<Vec<(String, String, String)>> {
+        let data = temp.path().join(format!("data-{kind}"));
+        fs::create_dir(&data)?;
+        let s = Arc::new(Mutex::new(Store::open(&data, "")?));
+        let options = ScanOptions {
+            root: root.to_string_lossy().into_owned(),
+            label: kind.into(),
+            kind: kind.into(),
+            index_content: true,
+            ..Default::default()
+        };
+        crate::scanner::scan(&s, options, &AtomicBool::new(false), &|_| {})?;
+        let mut store = s.lock().unwrap();
+        let mut rows = Vec::new();
+        for file in store
+            .search(SearchOptions {
+                limit: 200,
+                ..Default::default()
+            })?
+            .results
+            .into_iter()
+            .chain(
+                store
+                    .search(SearchOptions {
+                        limit: 200,
+                        offset: 200,
+                        ..Default::default()
+                    })?
+                    .results,
+            )
+        {
+            let text = store.file(file.id, 0, 1000)?["text"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned();
+            rows.push((file.name, file.text_status, text));
+        }
+        Ok(rows)
+    };
+    let parallel = documents("computer")?;
+    assert_eq!(parallel.len(), 301);
+    assert_eq!(
+        parallel.iter().filter(|f| f.1 == "indexed").count(),
+        300,
+        "{parallel:?}"
+    );
+    assert_eq!(parallel, documents("lto")?);
+
+    // Cancelling while workers run keeps committed documents and skips stale cleanup.
+    let data = temp.path().join("data-cancel");
+    fs::create_dir(&data)?;
+    let s = Arc::new(Mutex::new(Store::open(&data, "")?));
+    let cancel = AtomicBool::new(false);
+    let result = crate::scanner::scan(
+        &s,
+        ScanOptions {
+            root: root.to_string_lossy().into_owned(),
+            label: "cancel".into(),
+            index_content: true,
+            ..Default::default()
+        },
+        &cancel,
+        &|p| {
+            if p.indexed >= 20 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        },
+    );
+    assert!(result.is_err());
+    let stats = s.lock().unwrap().stats()?;
+    assert_eq!(stats["files"], 301);
+    assert!(stats["documents"].as_i64().unwrap() < 300, "{stats}");
+    assert_eq!(s.lock().unwrap().all_sources()?[0].status, "partial");
+    Ok(())
+}
