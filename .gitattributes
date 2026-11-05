@@ -1,5 +1,4 @@
 * text=auto
-*.go text eol=lf
 *.rs text eol=lf
 *.toml text eol=lf
 Cargo.lock text eol=lf

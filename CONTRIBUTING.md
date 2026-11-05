@@ -55,7 +55,7 @@ python scripts/audit2_import_order.py --binary target/release/allfiles --output 
 
 Do not run competing heavy benchmarks simultaneously. Preserve result counts and ordered IDs when comparing search implementations; record the binary hash, workload, environment and raw samples. Timing alone is not evidence that a query returned the right results. Real browser interaction supplements the scripted DOM/state checks.
 
-The Rust test `reads_and_updates_go_encryption_format` is ignored by default. It requires the specific synthetic encrypted Go fixture described in `src/tests.rs`, supplied through `ALLFILES_GO_FIXTURE`, and can then run with `cargo test --locked reads_and_updates_go_encryption_format -- --include-ignored`. This variable identifies a test fixture, not a password. Never substitute a personal catalog. Go reference checks use the version pinned by `go.mod`; run `go test ./...` when changing that implementation or compatibility fixtures.
+The Rust test `reads_and_updates_go_encryption_format` is ignored by default. It requires the specific synthetic encrypted Go fixture described in `src/tests.rs`, supplied through `ALLFILES_GO_FIXTURE`, and can then run with `cargo test --locked reads_and_updates_go_encryption_format -- --include-ignored`. This variable identifies a test fixture, not a password. Never substitute a personal catalog. To create the fixture, build the historical Go version from the `v0.2.0` tag (`go build .`), run `allfiles demo --data <empty folder>`, then `allfiles encrypt --data <that folder> --out <new folder>` in an interactive terminal with the password `cross-language-test-password`.
 
 ## Submit a change
 
@@ -65,4 +65,4 @@ Use [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to locate components and [docs/
 
 ## Dependency updates
 
-Dependabot is configured to check the production Cargo manifest and GitHub Actions monthly, with at most three Cargo and two Actions version-update pull requests open at once. This configuration does not enable automatic merging or prove that an update is compatible. Review changes to native SQLite, text parsing and encryption especially carefully; run the relevant compatibility/regression checks and refresh third-party notices when dependencies change. The Go reference and isolated experiments need separate deliberate updates.
+Dependabot is configured to check the production Cargo manifest and GitHub Actions monthly, with at most three Cargo and two Actions version-update pull requests open at once. This configuration does not enable automatic merging or prove that an update is compatible. Review changes to native SQLite, text parsing and encryption especially carefully; run the relevant compatibility/regression checks and refresh third-party notices when dependencies change.

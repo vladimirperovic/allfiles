@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Document text is extracted on up to four cores for folders, computers and external disks; Blu-ray and LTO media are still read one file at a time. On four cores, 240 multi-page PDFs indexed in 1.9 s instead of 4.5 s with identical text.
+- Removed the Go reference implementation, its Go modules and the historical `experiments/` comparisons from the repository; they remain in earlier tags such as v0.1.6 and v0.2.0. The Rust executable keeps opening and updating catalogs written by the Go versions, including encrypted ones (checked with an encrypted catalog created by the v0.2.0 Go build). CI, Dependabot and the security workflow no longer build or audit Go code.
 - Fixed filename and folder search for names stored in decomposed Unicode (NFD), which macOS and Mac-formatted media commonly use. Such names containing `č`, `ć`, `š` or `ž` were not found by either `račun` or `racun`; both now match. Existing catalogs refresh their stored search names once when opened, and remain readable by 0.1.6.
 
 ## 0.1.6 — Security maintenance — 2026-10-29

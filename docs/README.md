@@ -15,7 +15,7 @@ AllFiles 0.1.6 is the public release of the current Rust application. It catalog
 | [Security](../SECURITY.md) | Private reporting, encryption and local-service limitations |
 | [MIT license](../LICENSE) | License for AllFiles |
 | [Third-party notices](../THIRD_PARTY_NOTICES.txt) | Licenses retained by dependencies |
-| [Historical experiments](https://github.com/vladimirperovic/allfiles/blob/main/experiments/README.md) | Scoped Go/native-SQLite/Rust comparisons and raw samples |
+| [Historical experiments](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/README.md) | Scoped Go/native-SQLite/Rust comparisons and raw samples, kept with release 0.1.6 |
 
 [Download v0.1.6](https://github.com/vladimirperovic/allfiles/releases/tag/v0.1.6) or open the [browser demo](https://vladimirperovic.github.io/allfiles/). The demo immediately displays a dashboard with fictional data for 1 LTO tape, 3 Blu-ray media and 3 disks. It does not connect to your catalog or read your files.
 

@@ -1,6 +1,6 @@
 # Architecture
 
-AllFiles is a Rust executable with an embedded HTML/CSS/JavaScript interface and native SQLite/FTS5. It binds a local HTTP service to `127.0.0.1`; the browser renders paged results rather than loading the whole catalog. The Go implementation at the repository root is retained for reference and format compatibility, and is not part of the Cargo executable.
+AllFiles is a Rust executable with an embedded HTML/CSS/JavaScript interface and native SQLite/FTS5. It binds a local HTTP service to `127.0.0.1`; the browser renders paged results rather than loading the whole catalog. The earlier Go implementation was removed from the repository after 0.1.6; it remains in earlier tags such as v0.1.6 and v0.2.0. The Rust executable still opens and updates catalogs, including encrypted ones, written by that implementation.
 
 ## Components
 

@@ -33,55 +33,6 @@ jobs:
       # none are ignored or hidden behind a successful dependency snapshot.
       - name: Audit application dependencies
         run: cargo +1.99.1 audit --file Cargo.lock
-      - name: Audit Rust comparison dependencies
-        if: ${{ !cancelled() && steps.install-audit.outcome == 'success' }}
-        run: cargo +1.99.1 audit --file experiments/rust-search/Cargo.lock
-
-  go-audit:
-    name: Go vulnerability audit (${{ matrix.name }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: reference application
-            directory: .
-            tags: ''
-          - name: comparison pure Go
-            directory: experiments/go-search
-            tags: ''
-          - name: comparison native SQLite
-            directory: experiments/go-search
-            tags: native
-    defaults:
-      run:
-        working-directory: ${{ matrix.directory }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        id: setup-go
-        with:
-          go-version: '1.26.10'
-          cache-dependency-path: |
-            go.sum
-            experiments/go-search/go.sum
-      - name: Install pinned vulnerability checker
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-      - name: Check reachable vulnerable code
-        env:
-          GOVULNCHECK_TAGS: ${{ matrix.tags }}
-        run: |
-          if [ -n "$GOVULNCHECK_TAGS" ]; then
-            govulncheck -tags "$GOVULNCHECK_TAGS" ./...
-          else
-            govulncheck ./...
-          fi
-      - name: Test the Go reference on Linux, including symlink boundaries
-        if: ${{ !cancelled() && matrix.directory == '.' && steps.setup-go.outcome == 'success' }}
-        run: go test -v ./... -count=1
 
   snapshot-tests:
     name: Dependency snapshot tests

@@ -29,7 +29,6 @@ preview/
 .venv/
 __pycache__/
 coverage.out
-/experiments/rust-search/target/
 /target/
 *.test
 *.zip

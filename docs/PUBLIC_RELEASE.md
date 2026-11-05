@@ -5,7 +5,7 @@ This release publishes the current Rust AllFiles application under the [MIT lice
 ## What is public
 
 - Rust application sources, embedded interface and synthetic regression scripts.
-- Go reference/compatibility sources and historical synthetic performance experiments.
+- Go reference/compatibility sources and historical synthetic performance experiments (in the v0.1.6 tag and earlier tags; removed from later sources).
 - User/developer documentation and third-party license notices.
 - Platform packages that are actually attached to the release, with SHA-256 checksums.
 - A separate static [browser demo](https://vladimirperovic.github.io/allfiles/).
