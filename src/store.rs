@@ -15,11 +15,13 @@ use sha2::{Digest, Sha256};
 mod fts_tokens;
 use fts_tokens::Tokenizer;
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
+    ffi::{c_int, c_void},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    ptr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -232,7 +234,10 @@ pub struct Store {
     _lock: File,
     pub catalog_id: String,
     attached: Cell<bool>,
+    // Boxed so SQLite's progress hook can hold a stable pointer to it.
+    interrupt: RefCell<Option<Box<Interrupt>>>,
 }
+pub type Interrupt = Arc<dyn Fn() -> bool + Send + Sync>;
 fn open_connection(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<Connection> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() || !meta.is_file() => {
@@ -321,27 +326,22 @@ fn refold_names(conn: &mut Connection) -> Result<()> {
         Ok(changed)
     };
     // The files_au trigger keeps the external-content name index in step.
-    for (id, _, folded) in stale("SELECT id,name,search_name FROM files WHERE name GLOB ?")? {
-        tx.execute(
-            "UPDATE files SET search_name=? WHERE id=?",
-            params![folded, id],
-        )?;
+    let names = stale("SELECT id,name,search_name FROM files WHERE name GLOB ?")?;
+    let mut rename = tx.prepare("UPDATE files SET search_name=? WHERE id=?")?;
+    for (id, _, folded) in names {
+        rename.execute(params![folded, id])?;
     }
-    for (id, old, folded) in stale("SELECT id,path,search_path FROM directories WHERE path GLOB ?")?
-    {
-        tx.execute(
-            "INSERT INTO paths(paths,rowid,search_path) VALUES('delete',?,?)",
-            params![id, old],
-        )?;
-        tx.execute(
-            "UPDATE directories SET search_path=? WHERE id=?",
-            params![folded, id],
-        )?;
-        tx.execute(
-            "INSERT INTO paths(rowid,search_path) VALUES(?,?)",
-            params![id, folded],
-        )?;
+    let paths = stale("SELECT id,path,search_path FROM directories WHERE path GLOB ?")?;
+    let mut unindex =
+        tx.prepare("INSERT INTO paths(paths,rowid,search_path) VALUES('delete',?,?)")?;
+    let mut repath = tx.prepare("UPDATE directories SET search_path=? WHERE id=?")?;
+    let mut index = tx.prepare("INSERT INTO paths(rowid,search_path) VALUES(?,?)")?;
+    for (id, old, folded) in paths {
+        unindex.execute(params![id, old])?;
+        repath.execute(params![folded, id])?;
+        index.execute(params![id, folded])?;
     }
+    drop((rename, unindex, repath, index));
     tx.execute(
         "INSERT INTO meta(key,value) VALUES('search_fold',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         [SEARCH_FOLD],
@@ -451,7 +451,42 @@ impl Store {
             _lock: lock,
             catalog_id,
             attached: Cell::new(false),
+            interrupt: RefCell::new(None),
         })
+    }
+    // Interrupt long SQL when `stopped` returns true; None removes the hook.
+    // rusqlite's own setter needs &mut Connection, which ensure_content (&self)
+    // does not have, so the hook is installed directly with a stable pointer.
+    pub fn set_interrupt(&self, stopped: Option<Interrupt>) -> Result<()> {
+        self.clear_interrupt();
+        *self.interrupt.borrow_mut() = stopped.map(Box::new);
+        self.install_interrupt();
+        Ok(())
+    }
+    fn clear_interrupt(&self) {
+        unsafe {
+            rusqlite::ffi::sqlite3_progress_handler(self.conn.handle(), 0, None, ptr::null_mut());
+        }
+    }
+    fn install_interrupt(&self) {
+        unsafe extern "C" fn stopped(data: *mut c_void) -> c_int {
+            // SQLite calls this on the connection's thread while the boxed
+            // closure is installed; set_interrupt clears it before freeing.
+            let stopped = unsafe { &*data.cast::<Interrupt>() };
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| stopped())).unwrap_or(true)
+                as c_int
+        }
+        if let Some(boxed) = self.interrupt.borrow().as_ref() {
+            let data = (&**boxed as *const Interrupt).cast_mut().cast::<c_void>();
+            unsafe {
+                rusqlite::ffi::sqlite3_progress_handler(
+                    self.conn.handle(),
+                    1000,
+                    Some(stopped),
+                    data,
+                );
+            }
+        }
     }
     pub fn check(&self) -> Result<()> {
         if same_file::Handle::from_path(&self.dir).ok().as_ref() != Some(&self.identity) {
@@ -513,19 +548,14 @@ impl Store {
         })();
         if let Err(e) = result {
             // A cancellation handler must not interrupt rollback/detach too.
-            // The request owner clears/reinstalls it around each operation.
-            unsafe {
-                rusqlite::ffi::sqlite3_progress_handler(
-                    self.conn.handle(),
-                    0,
-                    None,
-                    std::ptr::null_mut(),
-                );
-            }
+            // Restore the request's handler afterwards so the rest of the
+            // request still honours its deadline and disconnects.
+            self.clear_interrupt();
             let _ = self
                 .conn
                 .execute_batch("ROLLBACK TO content_availability; RELEASE content_availability");
             let _ = self.conn.execute_batch("DETACH DATABASE content");
+            self.install_interrupt();
             return Err(e);
         }
         self.attached.set(true);
@@ -979,7 +1009,14 @@ impl Store {
         };
         let mut content_sql = "0";
         let mut content_args: Vec<SqlValue> = Vec::new();
-        if o.mode != "files" && self.ensure_content(false)? {
+        // "all" still answers from names and paths when content.sqlite is
+        // unreadable; a content-only search reports why it cannot run.
+        let content = match o.mode.as_str() {
+            "files" => false,
+            "content" => self.ensure_content(false)?,
+            _ => self.ensure_content(false).unwrap_or(false),
+        };
+        if content {
             content_sql = "f.id IN(SELECT file_id FROM temp.available_content)";
             let tq = text_query(query);
             if !tq.is_empty() {

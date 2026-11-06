@@ -1391,3 +1391,79 @@ fn parallel_extraction_matches_one_reader_and_stops_on_cancel() -> anyhow::Resul
     assert_eq!(s.lock().unwrap().all_sources()?[0].status, "partial");
     Ok(())
 }
+#[test]
+fn foreign_content_keeps_name_search_and_request_interrupt() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let names = s.conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='files_source'",
+        [],
+        |r| r.get::<_, i64>(0),
+    )?;
+    assert_eq!(names, 0, "files_source duplicates files_source_size");
+    let source = s.begin_scan(&ScanOptions {
+        root: "demo://foreign".into(),
+        ..Default::default()
+    })?;
+    let f = s
+        .upsert(&source.id, "scan", &[entry("Račun 2026.txt")])?
+        .remove(0);
+    s.record_content(f.id, &f.version, "indexed", "invoice text", "")?;
+    s.finish_scan(&source.id, "scan", true)?;
+    drop(s);
+    let other = tempfile::tempdir()?;
+    let other = Store::open(other.path(), "")?;
+    other.ensure_content(true)?;
+    fs::copy(
+        other.dir.join("content.sqlite"),
+        temp.path().join("content.sqlite"),
+    )?;
+    drop(other);
+    let mut s = Store::open(temp.path(), "")?;
+    // Filename matches must survive an unreadable content database in "all".
+    let found = s.search(SearchOptions {
+        query: "racun".into(),
+        mode: "all".into(),
+        ..Default::default()
+    })?;
+    assert_eq!(found.total, 1);
+    assert_eq!(found.results[0].text_status, "not_indexed");
+    assert!(
+        s.search(SearchOptions {
+            query: "invoice".into(),
+            mode: "content".into(),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    // A failed attach must not leave the rest of the request uninterruptible.
+    s.set_interrupt(Some(std::sync::Arc::new(|| true)))?;
+    assert!(s.ensure_content(false).is_err());
+    let interrupted = s.conn.query_row(
+        "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i<10000000) SELECT sum(i) FROM n",
+        [],
+        |r| r.get::<_, i64>(0),
+    );
+    assert!(interrupted.is_err(), "request interrupt was removed");
+    s.set_interrupt(None)?;
+    Ok(())
+}
+#[test]
+fn office_parts_keep_numbered_document_order() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let slide = |n: u32| {
+        format!("<p:sld xmlns:p='p' xmlns:a='a'><a:p><a:t>Slide{n}text</a:t></a:p></p:sld>")
+    };
+    let parts = [1, 10, 2, 11, 9].map(|n| (format!("ppt/slides/slide{n}.xml"), slide(n)));
+    let parts = parts
+        .iter()
+        .map(|(name, xml)| (name.as_str(), xml.as_str()))
+        .collect::<Vec<_>>();
+    let v = crate::extract::extract(&office_file(temp.path(), "pptx", &parts)?, &cancel);
+    assert_eq!(v.status, "indexed", "{v:?}");
+    let order =
+        [1, 2, 9, 10, 11].map(|n| v.text.find(&format!("Slide{n}text")).expect("slide text"));
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{:?}", v.text);
+    Ok(())
+}

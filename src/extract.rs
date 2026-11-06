@@ -241,6 +241,19 @@ fn part(name: &str, ext: &str) -> bool {
         _ => name == "content.xml",
     }
 }
+// Shared strings first, then numbered parts in document order: slide2 before
+// slide10, sheet9 before sheet10. Plain string order would interleave them.
+fn part_order(name: &str) -> (bool, String, u128, String) {
+    let stem = name.strip_suffix(".xml").unwrap_or(name);
+    let prefix = stem.trim_end_matches(|c: char| c.is_ascii_digit());
+    let number = stem[prefix.len()..].parse().unwrap_or(u128::MAX);
+    (
+        name != "xl/sharedStrings.xml",
+        prefix.to_owned(),
+        number,
+        name.to_owned(),
+    )
+}
 fn office(path: &Path, ext: &str, sink: &mut Sink, cancel: &AtomicBool) -> Result<()> {
     let mut zip = zip::ZipArchive::new(File::open(path)?)?;
     if zip.len() > 10_000 {
@@ -271,7 +284,7 @@ fn office(path: &Path, ext: &str, sink: &mut Sink, cancel: &AtomicBool) -> Resul
     if names.is_empty() {
         bail!("Document archive has no recognized text parts");
     }
-    names.sort_by(|a, b| (a != "xl/sharedStrings.xml", a).cmp(&(b != "xl/sharedStrings.xml", b)));
+    names.sort_by_cached_key(|name| part_order(name));
     let mut shared = Vec::new();
     let mut decoded_expanded = 0;
     for name in names {

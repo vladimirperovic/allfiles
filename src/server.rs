@@ -247,11 +247,9 @@ fn query_store<T>(
     let mut store = control.lock_store(&app.store)?;
     control.check()?;
     let progress = control.clone();
-    store
-        .conn
-        .progress_handler(1000, Some(move || progress.stopped()))?;
+    store.set_interrupt(Some(Arc::new(move || progress.stopped())))?;
     let result = query(&mut store);
-    store.conn.progress_handler(0, None::<fn() -> bool>)?;
+    store.set_interrupt(None)?;
     control.check()?;
     result
 }
@@ -442,7 +440,9 @@ fn api(
         "/api/session" => json!({"token":app.token,"instance_id":app.instance_id}),
         "/api/status" => app.status()?,
         "/api/sources" => {
-            let s = app.store.lock().unwrap();
+            // Bounded like searches: a long export or scan batch must not
+            // park request threads indefinitely.
+            let s = control.lock_store(&app.store)?;
             if q.contains_key("id") || q.contains_key("offset") || q.contains_key("limit") {
                 let offset = number(&q, "offset", 0)?;
                 let limit = number(&q, "limit", 100)?;
@@ -545,7 +545,7 @@ fn api(
                 folder: bool,
             }
             let o: Open = decode(bytes)?;
-            let f = app.store.lock().unwrap().metadata(o.id)?;
+            let f = control.lock_store(&app.store)?.metadata(o.id)?;
             let target = validate_open(&f, o.folder)?;
             open_local(
                 target

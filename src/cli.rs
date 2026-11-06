@@ -143,9 +143,14 @@ pub fn run() -> Result<()> {
                 shutdown_signal().await;
                 signal.store(true, Ordering::Relaxed);
             });
+            // Extraction reports every document; print a phase change at once
+            // and other progress at most once per second.
+            let last = std::cell::RefCell::new((String::new(), std::time::Instant::now()));
             let report = |p: scanner::Progress| {
-                if p.scanned % 256 == 0 {
+                let mut last = last.borrow_mut();
+                if p.phase != last.0 || last.1.elapsed() >= std::time::Duration::from_secs(1) {
                     eprintln!("{}: {} files, {} documents", p.phase, p.scanned, p.indexed);
+                    *last = (p.phase, std::time::Instant::now());
                 }
             };
             if command == "scan" {

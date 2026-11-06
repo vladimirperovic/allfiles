@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Search in "all" mode now returns filename and path matches when `content.sqlite` is damaged or belongs to another catalog, instead of failing the whole request. Content-only search still reports the problem.
+- Presentations, workbooks and documents with ten or more numbered parts are indexed in document order (slide 2 before slide 10). Rescan affected media to reorder text that was already extracted.
+- A request whose content database could not be attached keeps its 15-second deadline and disconnect cancellation for the rest of its work.
+- The media list and "open file" requests no longer wait indefinitely for the catalog while an export or scan batch holds it; they share the search deadline.
+- `scan`/`import` in the terminal print progress at most once per second (and on each phase change) instead of two lines per extracted document.
+- Removed the redundant `files_source` index, already covered by `files_source_size`. On a synthetic 100,000-file catalog this makes the catalog 10% smaller (46.6 → 42.0 MB) and the first import about 14% faster (4.09 → 3.51 s); search times are unchanged. Older versions recreate the index when they open the catalog.
 - Document text is extracted on up to four cores for folders, computers and external disks; Blu-ray and LTO media are still read one file at a time. On four cores, 240 multi-page PDFs indexed in 1.9 s instead of 4.5 s with identical text.
 - Removed the Go reference implementation, its Go modules and the historical `experiments/` comparisons from the repository; they remain in earlier tags such as v0.1.6 and v0.2.0. The Rust executable keeps opening and updating catalogs written by the Go versions, including encrypted ones (checked with an encrypted catalog created by the v0.2.0 Go build). CI, Dependabot and the security workflow no longer build or audit Go code.
 - Fixed filename and folder search for names stored in decomposed Unicode (NFD), which macOS and Mac-formatted media commonly use. Such names containing `č`, `ć`, `š` or `ž` were not found by either `račun` or `racun`; both now match. Existing catalogs refresh their stored search names once when opened, and remain readable by 0.1.6.
