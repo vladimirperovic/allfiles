@@ -106,9 +106,19 @@ An LTO tape must be available as a mounted filesystem or through a supported cat
 
 The interface uses a dark Graphite theme, translucent panels, readable table rows and small red accents. The padlock reflects encryption of the currently open catalog. **Animation** toggles the background particles; animation also pauses for reduced-motion preferences and when the page is hidden. These controls require no external services.
 
-## Import an existing WinCatalog export
+## Import an existing WinCatalog catalog
 
-Start with a CSV report containing filenames, paths, sizes and, if applicable, media labels. Common CSV/TSV layouts, EFU file lists and recognized XML reports are supported:
+Point AllFiles directly at the native WinCatalog database (`.w3cat`). It is opened read-only and is never modified; no journal or lock file is written next to it, so it may stay on a read-only or removable disk. Every scanned medium in the catalog becomes one AllFiles medium: optical discs are imported as `bluray`, everything else as `external`, unless you pass `--kind`. Files stored *inside* archives (the contents WinCatalog lists under a ZIP) are skipped, because AllFiles does not look inside archives when scanning either.
+
+```sh
+./allfiles-linux-amd64 import \
+  --data "$PWD/data" \
+  --file "/path/to/My WinCatalog File.w3cat"
+```
+
+The reader also brings over, per file, WinCatalog's **thumbnail**, **EXIF** (camera, lens, size, date taken, ISO, exposure, aperture, focal length, flash, GPS), **audio tags** (title, artist, album, year, track, genre, duration, bitrate), **tags**, **rating** (shown as 1–5 stars), **comment** and **CRC32** where present. They show in the file view, and a tag can be clicked to list the files that carry it. WinCatalog records CRC32 only for entries inside archives (which are skipped) and its md5 column is empty in the catalog this was tested on, so neither is usually present; md5 is not imported. Thumbnails are stored in `content.sqlite` (about 2.4 GB for 220,000 thumbnails), everything else in `catalog.sqlite` (+48 MB). A catalog with about 433,000 items (348,000 files, 10 media, 220,000 thumbnails) imported in about 30 seconds. Re-running the same import updates the same media instead of duplicating them. The `.w3cat` file may be larger than 2 GiB (up to 64 GiB). A WinCatalog password only protects WinCatalog's own interface; the data is not encrypted, and AllFiles does not ask for or check that password.
+
+Alternatively, start with a CSV report containing filenames, paths, sizes and, if applicable, media labels. Common CSV/TSV layouts, EFU file lists and recognized XML reports are supported:
 
 ```sh
 ./allfiles-linux-amd64 import \
@@ -118,9 +128,13 @@ Start with a CSV report containing filenames, paths, sizes and, if applicable, m
   --kind bluray
 ```
 
-**Compatibility with your particular WinCatalog export still needs validation on a real sample.** This is not a promise to read every CSV/XML layout or WinCatalog's native working database. Keep the original catalog. Metadata import does not reconstruct document text; content indexing needs access to the original documents.
+**Compatibility with your particular CSV/XML export still needs validation on a real sample.** This is not a promise to read every CSV/XML layout. The native `.w3cat` reader was checked against one real WinCatalog 2024 database (file count and total size matched the source exactly); other WinCatalog versions may differ. Keep the original catalog. Metadata import does not reconstruct document text; content indexing needs access to the original documents.
 
 In hierarchical XML, folder names/paths and media metadata may be attributes or elements preceding their file records. Late metadata that would change an already interpreted path or medium is rejected during validation before writes. UNC paths and media serial numbers are preserved.
+
+## Browse like a file manager
+
+Choose a medium in the media filter and leave the search box empty: the list shows that medium's folders first (with file count and size), then the files in it. Double-click a folder, or press Enter, to open it; use the `..` row, Backspace or the path above the table to go back. Entering a search, a type or tag filter, or another sort order switches to the flat result list.
 
 ## Export, back up and move a catalog
 

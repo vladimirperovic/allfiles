@@ -2,6 +2,7 @@ use crate::{
     crypto,
     scanner::{self, Progress, SharedStore},
     store::{self, ScanOptions, ScannedFile, Source},
+    w3cat,
 };
 use anyhow::{Result, bail};
 use quick_xml::{Reader, events::Event};
@@ -24,10 +25,12 @@ pub struct ImportOptions {
     pub kind: String,
     pub location: String,
 }
-struct Record {
-    file: ScannedFile,
-    media: String,
-    location: String,
+pub(crate) struct Record {
+    pub(crate) file: ScannedFile,
+    pub(crate) media: String,
+    pub(crate) location: String,
+    /// Medium kind suggested by the source format; empty when it has none.
+    pub(crate) kind: &'static str,
 }
 struct Batch {
     source: Source,
@@ -41,8 +44,18 @@ pub fn import(
 ) -> Result<()> {
     let path = store::absolute(Path::new(&options.path))?;
     let before = fs::metadata(&path)?;
-    if !before.is_file() || before.len() > 2 << 30 {
-        bail!("Import requires a regular export file smaller than 2 GiB");
+    // A native WinCatalog database is read in place, record by record, so it
+    // may be far larger than a text export that must be scanned in full.
+    let limit: u64 = if w3cat::is_w3cat(&path) {
+        64 << 30
+    } else {
+        2 << 30
+    };
+    if !before.is_file() || before.len() > limit {
+        bail!(
+            "Import requires a regular export file smaller than {} GiB",
+            limit >> 30
+        );
     }
     let mut state = Progress {
         id: crypto::random_id(),
@@ -53,7 +66,7 @@ pub fn import(
     report(state.clone());
     let mut count = 0;
     let mut total_bytes = 0i64;
-    parse(&path, cancel, &mut |record| {
+    parse(&path, cancel, false, &mut |record| {
         total_bytes = total_bytes.checked_add(record.file.size).ok_or_else(|| {
             anyhow::anyhow!(
                 "Export total size exceeds the supported 64-bit limit (9223372036854775807 bytes)"
@@ -78,19 +91,22 @@ pub fn import(
             .to_string_lossy()
             .into_owned();
     }
-    if options.kind.is_empty() {
-        options.kind = "bluray".into();
-    }
+    // Without an explicit kind each medium keeps the kind its source implies,
+    // falling back to a disc for formats that carry none.
+    let explicit_kind = !options.kind.is_empty();
     let root = format!(
         "import://{}",
         hex::encode(&Sha256::digest(path.to_string_lossy().as_bytes())[..16])
     );
     let mut groups: HashMap<String, Batch> = HashMap::new();
     let mut pending = 0usize;
+    // Thumbnails make records far larger than names, so memory is also bounded
+    // by bytes: a batch is written once it holds this many thumbnail bytes.
+    let mut pending_bytes = 0usize;
     state.phase = "importing".into();
     report(state.clone());
     let result = (|| -> Result<()> {
-        parse(&path, cancel, &mut |record| {
+        parse(&path, cancel, true, &mut |record| {
             if !groups.contains_key(&record.media) {
                 if groups.len() >= 10_000 {
                     bail!("Export contains more than 10,000 media groups; split the export");
@@ -109,10 +125,17 @@ pub fn import(
                     "{root}/{}",
                     hex::encode(&Sha256::digest(record.media.as_bytes())[..8])
                 );
+                let kind = if explicit_kind {
+                    options.kind.clone()
+                } else if record.kind.is_empty() {
+                    "bluray".into()
+                } else {
+                    record.kind.into()
+                };
                 let source = store.lock().unwrap().begin_scan(&ScanOptions {
                     root: media_root,
                     label,
-                    kind: options.kind.clone(),
+                    kind,
                     location,
                     ..Default::default()
                 })?;
@@ -126,10 +149,17 @@ pub fn import(
             }
             let group = groups.get_mut(&record.media).unwrap();
             state.current = record.file.relative.clone();
+            pending_bytes += record
+                .file
+                .extra
+                .as_ref()
+                .map_or(0, |extra| extra.thumbnail_bytes());
             group.entries.push(record.file);
             pending += 1;
-            if group.entries.len() >= scanner::BATCH || pending >= 4096 {
+            if group.entries.len() >= scanner::BATCH || pending >= 4096 || pending_bytes >= 32 << 20
+            {
                 flush(store, &mut groups, &mut pending, &mut state, cancel, report)?;
+                pending_bytes = 0;
             }
             Ok(())
         })?;
@@ -185,11 +215,17 @@ fn flush(
     report(state.clone());
     Ok(())
 }
+/// `details` asks a source that has them (a WinCatalog database) to include
+/// thumbnails, EXIF and similar extras; the validation pass does not need them.
 fn parse(
     path: &Path,
     cancel: &AtomicBool,
+    details: bool,
     emit: &mut dyn FnMut(Record) -> Result<()>,
 ) -> Result<()> {
+    if w3cat::is_w3cat(path) {
+        return w3cat::read(path, cancel, details, emit);
+    }
     let decoded = encoding_rs_io::DecodeReaderBytesBuilder::new()
         .utf8_passthru(true)
         .build(File::open(path)?);
@@ -202,9 +238,7 @@ fn parse(
     {
         "csv" | "tsv" | "efu" => csv(decoded, cancel, emit),
         "xml" => xml(decoded, cancel, emit),
-        _ => bail!(
-            "Use a CSV, TSV, EFU or supported XML report; export a native WinCatalog database first"
-        ),
+        _ => bail!("Use a WinCatalog .w3cat database or a CSV, TSV, EFU or supported XML report"),
     }
 }
 fn normalize(s: &str) -> String {
@@ -456,7 +490,7 @@ fn clean_path(value: &str) -> String {
         s
     }
 }
-fn record(fields: HashMap<String, String>) -> Result<Option<Record>> {
+pub(crate) fn record(fields: HashMap<String, String>) -> Result<Option<Record>> {
     let kind = first(&fields, &["type", "itemtype", "kind"]).to_lowercase();
     if matches!(kind.as_str(), "folder" | "directory" | "disk" | "volume")
         || first(&fields, &["isfolder", "isdirectory"]).eq_ignore_ascii_case("true")
@@ -556,9 +590,11 @@ fn record(fields: HashMap<String, String>) -> Result<Option<Record>> {
             size,
             modified,
             modified_ns,
+            extra: None,
         },
         media,
         location,
+        kind: "",
     }))
 }
 fn date(value: &str) -> (i64, i64) {

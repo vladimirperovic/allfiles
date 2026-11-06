@@ -66,6 +66,7 @@ pub fn seed(s: &mut Store) -> Result<()> {
                     size: (128000 + (si + 1) * (ni + 3) * 178492) as i64,
                     modified: sec,
                     modified_ns: sec * 1_000_000_000,
+                    extra: None,
                 });
             }
         }

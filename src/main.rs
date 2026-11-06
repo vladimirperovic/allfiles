@@ -1,6 +1,7 @@
 mod cli;
 mod crypto;
 mod demo;
+mod details;
 mod encrypted_vfs;
 mod extract;
 mod import;
@@ -10,6 +11,7 @@ mod server;
 mod store;
 #[cfg(test)]
 mod tests;
+mod w3cat;
 fn main() {
     if let Err(e) = cli::run() {
         eprintln!("AllFiles: {e:#}");

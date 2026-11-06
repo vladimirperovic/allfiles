@@ -151,6 +151,7 @@ pub fn scan(
                 size: i64::try_from(meta.len())?,
                 modified: seconds,
                 modified_ns: nanos,
+                extra: None,
             });
             state.current = relative;
             if batch.len() == BATCH {

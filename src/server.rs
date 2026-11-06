@@ -263,7 +263,7 @@ async fn run_api(
     let control = RequestControl::new();
     // Permit ownership follows the blocking work, not the client connection.
     // A disconnected client cancels that work before its permit is released.
-    let limited_query = matches!(path.as_str(), "/api/search" | "/api/file");
+    let limited_query = matches!(path.as_str(), "/api/search" | "/api/file" | "/api/folder");
     let permit = if limited_query {
         match app.query_slots.clone().try_acquire_owned() {
             Ok(permit) => Some(permit),
@@ -459,12 +459,20 @@ fn api(
                 source: val("source"),
                 extension: val("ext"),
                 sort: val("sort"),
+                tag: val("tag"),
                 offset: number(&q, "offset", 0)?,
                 limit: number(&q, "limit", 0)?,
             };
             serde_json::to_value(query_store(app, control, |s| {
                 s.search_with_cancel(o, &|| control.stopped())
             })?)?
+        }
+        "/api/folder" => {
+            let (source, folder) = (val("source"), val("path"));
+            let (offset, limit) = (number(&q, "offset", 0)?, number(&q, "limit", 0)?);
+            query_store(app, control, |s| {
+                s.folder_with_cancel(&source, &folder, offset, limit, &|| control.stopped())
+            })?
         }
         "/api/file" => {
             let offset = number(&q, "text_offset", 0)?;
@@ -776,6 +784,7 @@ mod tests {
                     size: 7,
                     modified: 1,
                     modified_ns: 1_000_000_000,
+                    extra: None,
                 }],
             )?;
             store.finish_scan(&source.id, "unit", true)?;

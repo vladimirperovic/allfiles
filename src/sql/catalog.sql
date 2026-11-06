@@ -16,4 +16,10 @@ PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; P
  CREATE TRIGGER IF NOT EXISTS files_au AFTER UPDATE OF search_name ON files WHEN old.search_name != new.search_name BEGIN INSERT INTO names(names,rowid,search_name) VALUES('delete',old.id,old.search_name); INSERT INTO names(rowid,search_name) VALUES(new.id,new.search_name); END;
  CREATE TRIGGER IF NOT EXISTS dirs_ai AFTER INSERT ON directories BEGIN INSERT INTO paths(rowid,search_path) VALUES(new.id,new.search_path); END;
  CREATE TRIGGER IF NOT EXISTS dirs_ad AFTER DELETE ON directories BEGIN INSERT INTO paths(paths,rowid,search_path) VALUES('delete',old.id,old.search_path); END;
+ CREATE TABLE IF NOT EXISTS file_info(file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,crc32 TEXT NOT NULL DEFAULT '',rating INTEGER,comment TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS file_exif(file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,camera TEXT NOT NULL DEFAULT '',lens TEXT NOT NULL DEFAULT '',width INTEGER,height INTEGER,taken TEXT NOT NULL DEFAULT '',iso TEXT NOT NULL DEFAULT '',exposure TEXT NOT NULL DEFAULT '',aperture TEXT NOT NULL DEFAULT '',focal_length TEXT NOT NULL DEFAULT '',flash TEXT NOT NULL DEFAULT '',gps TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS file_audio(file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,artist TEXT NOT NULL DEFAULT '',album TEXT NOT NULL DEFAULT '',year TEXT NOT NULL DEFAULT '',track INTEGER,genre TEXT NOT NULL DEFAULT '',title TEXT NOT NULL DEFAULT '',duration REAL,bitrate INTEGER,channels INTEGER,sample_rate INTEGER);
+ CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY,name TEXT NOT NULL UNIQUE);
+ CREATE TABLE IF NOT EXISTS file_tags(file_id INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,PRIMARY KEY(file_id,tag_id)) WITHOUT ROWID;
+ CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag_id,file_id);
  INSERT OR IGNORE INTO meta(key,value) VALUES('schema','1');;

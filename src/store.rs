@@ -175,6 +175,8 @@ pub struct ScannedFile {
     pub size: i64,
     pub modified: i64,
     pub modified_ns: i64,
+    /// Thumbnail, EXIF, tags and similar details supplied by the source.
+    pub extra: Option<Box<crate::details::FileExtra>>,
 }
 // Keep the Go-compatible token for ordinary timestamps. Outside i64's
 // nanosecond range the seconds disambiguate the wrapped nanoseconds, retaining
@@ -211,6 +213,8 @@ pub struct SearchOptions {
     pub sort: String,
     pub offset: i64,
     pub limit: i64,
+    /// Only files carrying this exact tag.
+    pub tag: String,
 }
 #[derive(Serialize)]
 pub struct SearchResult {
@@ -703,7 +707,12 @@ impl Store {
         groups: &[(&str, &[ScannedFile])],
     ) -> Result<Vec<IndexedFile>> {
         self.check()?;
-        let has_content = self.ensure_content(false)?;
+        let wants_thumbnails = groups.iter().any(|(_, files)| {
+            files
+                .iter()
+                .any(|f| f.extra.as_ref().is_some_and(|x| x.thumbnail.is_some()))
+        });
+        let has_content = self.ensure_content(wants_thumbnails)?;
         let tx = self.conn.transaction()?;
         let mut out = Vec::with_capacity(groups.iter().map(|(_, files)| files.len()).sum());
         {
@@ -718,6 +727,7 @@ impl Store {
             let mut add_file = tx.prepare("INSERT INTO files(source_id,dir_id,name,search_name,extension,size,modified,modified_ns,version,seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?)")?;
             let mut unsupported =
                 tx.prepare("UPDATE files SET text_status='unsupported',text_detail='' WHERE id=?")?;
+            let mut details = crate::details::Writer::new(&tx, has_content)?;
             let mut linked = if has_content {
                 Some(tx.prepare("SELECT count(*) FROM content.links l JOIN content.documents d ON d.id=l.doc_id WHERE l.file_id=? AND l.version=?")?)
             } else {
@@ -787,6 +797,9 @@ impl Store {
                             "not_indexed".to_owned(),
                         )
                     };
+                    if let Some(extra) = &f.extra {
+                        details.save(id, &version, extra)?;
+                    }
                     let candidate = crate::extract::candidate(&f.extension);
                     if !candidate && (fresh || previous != version) {
                         unsupported.execute([id])?;
@@ -922,7 +935,15 @@ impl Store {
                 params![if complete { "ready" } else { "partial" }, now, source],
             )?;
         }
+        tx.execute(
+            "DELETE FROM tags WHERE id NOT IN(SELECT tag_id FROM file_tags)",
+            [],
+        )?;
         if attached {
+            tx.execute(
+                "DELETE FROM content.thumbnails WHERE file_id NOT IN(SELECT id FROM files)",
+                [],
+            )?;
             tx.execute_batch("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE text_status NOT IN ('indexed','truncated'));DELETE FROM content.fts WHERE rowid IN(SELECT id FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links));DELETE FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links);")?;
         }
         tx.commit()?;
@@ -958,6 +979,10 @@ impl Store {
         if !o.source.is_empty() {
             clauses.push("f.source_id=?".into());
             args.push(o.source.clone().into());
+        }
+        if !o.tag.is_empty() {
+            clauses.push("f.id IN(SELECT ft.file_id FROM file_tags ft JOIN tags t ON t.id=ft.tag_id WHERE t.name=?)".into());
+            args.push(o.tag.clone().into());
         }
         if !o.extension.is_empty() {
             clauses.push("f.extension=?".into());
@@ -1048,40 +1073,41 @@ impl Store {
             "modified" => "f.modified DESC,f.id",
             _ => "f.search_name,f.id",
         };
-        let (total, ids) = if o.source.is_empty() && o.extension.is_empty() && everything {
-            // Page through the ordered index first and join metadata for the page only.
-            let total =
-                self.conn
-                    .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
-                        r.get(0)
-                    })?;
-            let ids = self
-                .conn
-                .prepare(&format!(
-                    "SELECT f.id FROM files f ORDER BY {order} LIMIT ? OFFSET ?"
-                ))?
-                .query_map(params![o.limit, o.offset], |r| r.get::<_, i64>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            (total, ids)
-        } else {
-            // One ordered pass yields both the total and the requested page,
-            // so the match conditions are evaluated once instead of twice.
-            let mut statement = self.conn.prepare(&format!(
-                "SELECT f.id FROM files f{condition} ORDER BY {order}"
-            ))?;
-            let mut rows = statement.query(params_from_iter(args.iter()))?;
-            let (mut total, mut ids) = (0i64, Vec::new());
-            while let Some(row) = rows.next()? {
-                if total % 256 == 0 {
-                    check_operation(should_cancel)?;
+        let (total, ids) =
+            if o.source.is_empty() && o.extension.is_empty() && o.tag.is_empty() && everything {
+                // Page through the ordered index first and join metadata for the page only.
+                let total =
+                    self.conn
+                        .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
+                            r.get(0)
+                        })?;
+                let ids = self
+                    .conn
+                    .prepare(&format!(
+                        "SELECT f.id FROM files f ORDER BY {order} LIMIT ? OFFSET ?"
+                    ))?
+                    .query_map(params![o.limit, o.offset], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                (total, ids)
+            } else {
+                // One ordered pass yields both the total and the requested page,
+                // so the match conditions are evaluated once instead of twice.
+                let mut statement = self.conn.prepare(&format!(
+                    "SELECT f.id FROM files f{condition} ORDER BY {order}"
+                ))?;
+                let mut rows = statement.query(params_from_iter(args.iter()))?;
+                let (mut total, mut ids) = (0i64, Vec::new());
+                while let Some(row) = rows.next()? {
+                    if total % 256 == 0 {
+                        check_operation(should_cancel)?;
+                    }
+                    if total >= o.offset && total - o.offset < o.limit {
+                        ids.push(row.get::<_, i64>(0)?);
+                    }
+                    total += 1;
                 }
-                if total >= o.offset && total - o.offset < o.limit {
-                    ids.push(row.get::<_, i64>(0)?);
-                }
-                total += 1;
-            }
-            (total, ids)
-        };
+                (total, ids)
+            };
         let mut results = if ids.is_empty() {
             Vec::new()
         } else {
@@ -1224,7 +1250,12 @@ impl Store {
                 }
             }
         }
-        let mut response = json!({"file":f,"text":"","text_status":f.text_status,"text_detail":f.text_detail,"offset":offset,"returned_chars":0,"has_more":doc.is_some()});
+        let thumbnails = self.attached.get() || self.ensure_content(false).unwrap_or(false);
+        let version: String =
+            self.conn
+                .query_row("SELECT version FROM files WHERE id=?", [id], |r| r.get(0))?;
+        let details = crate::details::load(&self.conn, id, thumbnails, &version)?;
+        let mut response = json!({"file":f,"details":details,"text":"","text_status":f.text_status,"text_detail":f.text_detail,"offset":offset,"returned_chars":0,"has_more":doc.is_some()});
         if max_chars > 0 {
             let (selected, total, more) = if let Some(doc) = doc {
                 let payload: Vec<u8> = self.conn.query_row(
@@ -1245,6 +1276,138 @@ impl Store {
         }
         check_operation(should_cancel)?;
         Ok(response)
+    }
+    /// One level of a medium, like a file manager: subfolders first, then the
+    /// files stored directly in `path` ("" is the root of the medium). Paging
+    /// runs over that combined list. Folder names come from the stored file
+    /// paths, so a folder with only subfolders is listed too.
+    pub fn folder_with_cancel(
+        &mut self,
+        source: &str,
+        path: &str,
+        offset: i64,
+        limit: i64,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> Result<Value> {
+        let start = Instant::now();
+        check_operation(should_cancel)?;
+        self.check()?;
+        let path = path.replace('\\', "/");
+        let path = path.trim_matches('/');
+        if path.contains('\0') || path.len() > 32768 {
+            bail!("Invalid folder path");
+        }
+        let (label, kind): (String, String) =
+            self.conn
+                .query_row("SELECT label,kind FROM sources WHERE id=?", [source], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?;
+        let limit = if limit <= 0 || limit > 200 {
+            100
+        } else {
+            limit
+        };
+        let offset = offset.max(0);
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}/")
+        };
+        let mut folders: HashMap<String, (i64, i64)> = HashMap::new();
+        {
+            let mut statement = self.conn.prepare(
+                "SELECT d.path,count(f.id),coalesce(sum(f.size),0) FROM directories d JOIN files f ON f.dir_id=d.id WHERE d.source_id=? AND d.path GLOB ? GROUP BY d.id",
+            )?;
+            let mut rows =
+                statement.query(params![source, format!("{}*", glob_literal(&prefix))])?;
+            let mut seen = 0u32;
+            while let Some(row) = rows.next()? {
+                seen += 1;
+                if seen.is_multiple_of(256) {
+                    check_operation(should_cancel)?;
+                }
+                let full: String = row.get(0)?;
+                let Some(rest) = full.strip_prefix(prefix.as_str()) else {
+                    continue;
+                };
+                let Some(name) = rest.split('/').next().filter(|n| !n.is_empty()) else {
+                    continue;
+                };
+                let entry = folders.entry(name.to_owned()).or_default();
+                entry.0 += row.get::<_, i64>(1)?;
+                entry.1 += row.get::<_, i64>(2)?;
+            }
+        }
+        let mut folders: Vec<_> = folders.into_iter().collect();
+        folders.sort_by(|a, b| (fold(&a.0), &a.0).cmp(&(fold(&b.0), &b.0)));
+        let total_folders = folders.len() as i64;
+        let directory: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE source_id=? AND path=?",
+                params![source, path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let total_files: i64 = match directory {
+            Some(id) => {
+                self.conn
+                    .query_row("SELECT count(*) FROM files WHERE dir_id=?", [id], |r| {
+                        r.get(0)
+                    })?
+            }
+            None => 0,
+        };
+        if path.is_empty() && total_folders == 0 && total_files == 0 {
+            // An empty medium is fine; an unknown sub-folder is not.
+        } else if !path.is_empty() && total_folders == 0 && total_files == 0 {
+            bail!("Folder not found");
+        }
+        let page_folders: Vec<Value> = folders
+            .iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .map(|(name, (files, size))| {
+                json!({"name":name,"path":format!("{prefix}{name}"),"files":files,"size":size})
+            })
+            .collect();
+        let file_offset = (offset - total_folders).max(0);
+        let file_limit = limit - page_folders.len() as i64;
+        let files = match directory {
+            Some(id) if file_limit > 0 => {
+                check_operation(should_cancel)?;
+                let ids = self
+                    .conn
+                    .prepare("SELECT id FROM files WHERE dir_id=? ORDER BY search_name,id LIMIT ? OFFSET ?")?
+                    .query_map(params![id, file_limit, file_offset], |r| r.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                if ids.is_empty() {
+                    Vec::new()
+                } else {
+                    self.conn
+                        .prepare(&format!(
+                            "SELECT {COLUMNS}{FROM} WHERE f.id IN({}) ORDER BY f.search_name,f.id",
+                            vec!["?"; ids.len()].join(",")
+                        ))?
+                        .query_map(params_from_iter(ids.iter()), file_result)?
+                        .collect::<rusqlite::Result<Vec<_>>>()?
+                }
+            }
+            _ => Vec::new(),
+        };
+        check_operation(should_cancel)?;
+        Ok(json!({
+            "source":{"id":source,"label":label,"kind":kind},
+            "path":path,
+            "folders":page_folders,
+            "files":files,
+            "total":total_folders + total_files,
+            "total_folders":total_folders,
+            "total_files":total_files,
+            "offset":offset,
+            "limit":limit,
+            "elapsed_ms":start.elapsed().as_secs_f64()*1000.0,
+        }))
     }
     pub fn metadata(&self, id: i64) -> Result<FileResult> {
         self.check()?;

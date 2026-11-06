@@ -9,6 +9,7 @@ fn entry(name: &str) -> ScannedFile {
         size: 20,
         modified: 1700000000,
         modified_ns: 1700000000000000000,
+        extra: None,
     }
 }
 #[test]
@@ -1465,5 +1466,175 @@ fn office_parts_keep_numbered_document_order() -> anyhow::Result<()> {
     let order =
         [1, 2, 9, 10, 11].map(|n| v.text.find(&format!("Slide{n}text")).expect("slide text"));
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{:?}", v.text);
+    Ok(())
+}
+#[test]
+fn file_details_are_stored_found_by_tag_bound_to_the_version_and_removed_with_the_file()
+-> anyhow::Result<()> {
+    use crate::details::{Exif, FileExtra, Thumbnail};
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let src = s.begin_scan(&ScanOptions {
+        root: "import://details".into(),
+        label: "Details".into(),
+        kind: "external".into(),
+        ..Default::default()
+    })?;
+    let mut photo = entry("photo.jpg");
+    photo.extension = "jpg".into();
+    photo.extra = Some(Box::new(FileExtra {
+        crc32: "caa6c5a6".into(),
+        rating: Some(99),
+        comment: "On the beach".into(),
+        tags: vec!["Trip".into(), "5 Stars".into()],
+        exif: Exif {
+            camera: "Olympus E-PL1".into(),
+            width: Some(4032),
+            ..Default::default()
+        },
+        thumbnail: Thumbnail::new(vec![0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]),
+        ..Default::default()
+    }));
+    let other = entry("other.txt");
+    let indexed = s.upsert(&src.id, "scan1", &[photo.clone(), other.clone()])?;
+    s.finish_scan(&src.id, "scan1", true)?;
+    let id = indexed[0].id;
+    let view = s.file_with_cancel(id, 0, 0, &|| false)?;
+    let details = &view["details"];
+    assert_eq!(details["crc32"], "caa6c5a6");
+    assert_eq!(details["rating"], 5);
+    assert_eq!(details["comment"], "On the beach");
+    assert_eq!(details["tags"], serde_json::json!(["5 Stars", "Trip"]));
+    assert_eq!(details["exif"]["camera"], "Olympus E-PL1");
+    assert_eq!(details["exif"]["width"], 4032);
+    assert!(
+        details["thumbnail"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("data:image/jpeg;base64,"))
+    );
+    // A file without details has an empty object.
+    assert_eq!(
+        s.file_with_cancel(indexed[1].id, 0, 0, &|| false)?["details"],
+        serde_json::json!({})
+    );
+    let found = |s: &mut Store, tag: &str| -> anyhow::Result<Vec<String>> {
+        Ok(s.search(SearchOptions {
+            tag: tag.into(),
+            ..Default::default()
+        })?
+        .results
+        .into_iter()
+        .map(|f| f.name)
+        .collect())
+    };
+    assert_eq!(found(&mut s, "Trip")?, ["photo.jpg"]);
+    assert!(found(&mut s, "trip")?.is_empty());
+    assert_eq!(found(&mut s, "")?.len(), 2);
+    // Reimporting without details keeps what was stored, but a changed file
+    // no longer shows its old thumbnail.
+    let mut changed = entry("photo.jpg");
+    changed.extension = "jpg".into();
+    changed.size += 1;
+    s.upsert(&src.id, "scan2", &[changed, other.clone()])?;
+    s.finish_scan(&src.id, "scan2", true)?;
+    let view = s.file_with_cancel(id, 0, 0, &|| false)?;
+    assert!(view["details"].get("thumbnail").is_none());
+    assert_eq!(
+        view["details"]["tags"],
+        serde_json::json!(["5 Stars", "Trip"])
+    );
+    // A file that disappears takes its details, tags and thumbnail with it.
+    s.upsert(&src.id, "scan3", std::slice::from_ref(&other))?;
+    s.finish_scan(&src.id, "scan3", true)?;
+    assert!(found(&mut s, "Trip")?.is_empty());
+    drop(s);
+    let conn = rusqlite::Connection::open(temp.path().join("catalog.sqlite"))?;
+    for table in ["file_info", "file_exif", "file_tags", "tags"] {
+        let count: i64 =
+            conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
+        assert_eq!(count, 0, "{table}");
+    }
+    conn.execute(
+        "ATTACH ? AS content",
+        [temp.path().join("content.sqlite").to_str().unwrap()],
+    )?;
+    let thumbs: i64 =
+        conn.query_row("SELECT count(*) FROM content.thumbnails", [], |r| r.get(0))?;
+    assert_eq!(thumbs, 0);
+    Ok(())
+}
+#[test]
+fn folder_view_lists_subfolders_before_files_and_pages_over_both() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let src = s.begin_scan(&ScanOptions {
+        root: "import://folders".into(),
+        label: "Disc".into(),
+        kind: "bluray".into(),
+        ..Default::default()
+    })?;
+    let at = |dir: &str, name: &str, size: i64| ScannedFile {
+        dir: dir.into(),
+        size,
+        ..entry(name)
+    };
+    let files = [
+        at("", "zeta.txt", 1),
+        at("", "alpha.txt", 2),
+        at("Docs", "b.txt", 10),
+        at("Docs/2024", "c.txt", 100),
+        at("Docs/2024", "d.txt", 1000),
+        at("photos/Trip/Day1", "e.jpg", 5),
+        at("Docs 2", "x.txt", 7),
+    ];
+    s.upsert(&src.id, "scan", &files)?;
+    s.finish_scan(&src.id, "scan", true)?;
+    let view = |s: &mut Store, path: &str, offset: i64, limit: i64| {
+        s.folder_with_cancel(&src.id, path, offset, limit, &|| false)
+    };
+    let names = |v: &serde_json::Value, key: &str| -> Vec<String> {
+        v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+
+    let root = view(&mut s, "", 0, 100)?;
+    // "photos" has no files of its own and still shows up; order ignores case.
+    assert_eq!(names(&root, "folders"), ["Docs", "Docs 2", "photos"]);
+    assert_eq!(names(&root, "files"), ["alpha.txt", "zeta.txt"]);
+    assert_eq!(root["total"], 5);
+    assert_eq!(root["folders"][0]["files"], 3);
+    assert_eq!(root["folders"][0]["size"], 1110);
+    assert_eq!(root["folders"][2]["path"], "photos");
+
+    let docs = view(&mut s, "Docs", 0, 100)?;
+    assert_eq!(names(&docs, "folders"), ["2024"]);
+    assert_eq!(docs["folders"][0]["path"], "Docs/2024");
+    assert_eq!(names(&docs, "files"), ["b.txt"]);
+
+    // Slashes in either direction and stray separators are accepted.
+    assert_eq!(view(&mut s, "/Docs\\2024/", 0, 100)?["total"], 2);
+    // A folder that holds only another folder.
+    let trip = view(&mut s, "photos/Trip", 0, 100)?;
+    assert_eq!(names(&trip, "folders"), ["Day1"]);
+    assert!(names(&trip, "files").is_empty());
+
+    // Pages cover folders first, then files, with no gaps or repeats.
+    let mut all = Vec::new();
+    for offset in (0..5).step_by(2) {
+        let page = view(&mut s, "", offset, 2)?;
+        all.extend(names(&page, "folders"));
+        all.extend(names(&page, "files"));
+    }
+    assert_eq!(all, ["Docs", "Docs 2", "photos", "alpha.txt", "zeta.txt"]);
+
+    assert!(view(&mut s, "Nope", 0, 10).is_err());
+    assert!(
+        s.folder_with_cancel("missing", "", 0, 10, &|| false)
+            .is_err()
+    );
     Ok(())
 }

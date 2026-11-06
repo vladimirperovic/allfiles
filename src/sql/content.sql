@@ -4,3 +4,4 @@ PRAGMA content.journal_mode=DELETE; PRAGMA content.synchronous=FULL; PRAGMA cont
  CREATE TABLE IF NOT EXISTS content.links(file_id INTEGER PRIMARY KEY,version TEXT NOT NULL,doc_id INTEGER NOT NULL REFERENCES documents(id));
  CREATE INDEX IF NOT EXISTS content.links_doc ON links(doc_id);
  CREATE VIRTUAL TABLE IF NOT EXISTS content.fts USING fts5(body,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2');;
+ CREATE TABLE IF NOT EXISTS content.thumbnails(file_id INTEGER PRIMARY KEY,version TEXT NOT NULL,mime TEXT NOT NULL,data BLOB NOT NULL);

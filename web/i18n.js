@@ -2,6 +2,15 @@
 (() => {
   'use strict';
   const english = {
+    'Putanja': 'Path', 'Nazad': 'Up', 'Otvori folder': 'Open folder', 'Ovaj folder je prazan.': 'This folder is empty.',
+    'Nazad, jedan nivo gore. Dvoklik ili Enter otvara folder.': 'Up one level. Double-click or press Enter to open.',
+    'Folder {name}, {count} fajlova. Dvoklik ili Enter otvara folder.': 'Folder {name}, {count} files. Double-click or press Enter to open.',
+    '{count} fajlova': '{count} files', '{start}–{end} od {total} stavki': '{start}–{end} of {total} items',
+    'Oznake': 'Tags', 'Ocena': 'Rating', 'Komentar': 'Comment', 'Fotografija': 'Photo', 'Kamera': 'Camera', 'Objektiv': 'Lens',
+    'Snimljeno': 'Taken', 'Dimenzije': 'Dimensions', 'Ekspozicija': 'Exposure', 'Blenda': 'Aperture', 'Žižna daljina': 'Focal length',
+    'Blic': 'Flash', 'Opalio': 'Fired', 'Nije opalio': 'Did not fire', 'Naslov': 'Title', 'Izvođač': 'Artist', 'Godina': 'Year',
+    'Broj numere': 'Track', 'Žanr': 'Genre', 'Trajanje': 'Duration', 'Protok': 'Bitrate', 'Kanali': 'Channels', 'Frekvencija': 'Sample rate',
+    'Oznaka: {tag}': 'Tag: {tag}', 'Ukloni filter oznake': 'Remove tag filter', 'Prikaži fajlove sa ovom oznakom': 'Show files with this tag',
     'Preskoči na pretragu': 'Skip to search', 'Mediji u biblioteci': 'Library media',
     'Prikaz': 'View', 'Zbijeno': 'Compact', 'Udobno': 'Comfortable',
     'Prva stranica': 'First page', 'Poslednja stranica': 'Last page', 'Stranica': 'Page',
@@ -68,7 +77,7 @@
     'Indeksiraj sadržaj dokumenata': 'Index document content',
     'Tekst iz PDF, Word, Excel i PowerPoint fajlova. Prvo skeniranje može potrajati.': 'Text from PDF, Word, Excel and PowerPoint files. The first scan may take a while.',
     'Odustani': 'Cancel', 'Pokreni indeksiranje': 'Start indexing', 'POSTOJEĆA ARHIVA': 'EXISTING ARCHIVE',
-    'Izvezite katalog iz WinCataloga, zatim unesite putanju do izvoza na ovom računaru. Podržani su CSV, TSV, EFU i prepoznati XML izveštaji.': 'Export your catalog from WinCatalog, then enter the export path on this computer. CSV, TSV, EFU and recognized XML reports are supported.',
+    'Unesite putanju do WinCatalog baze (.w3cat) ili do izvoza na ovom računaru. Podržani su .w3cat, CSV, TSV, EFU i prepoznati XML izveštaji.': 'Enter the path to a WinCatalog database (.w3cat) or an export on this computer. .w3cat, CSV, TSV, EFU and recognized XML reports are supported.',
     'Putanja do izvoza': 'Export file path', 'Naziv arhive': 'Archive label', 'Blu-ray arhiva': 'Blu-ray archive',
     'Kuća · ormar sa diskovima': 'Home · disc cabinet',
     'Uvoz spiska fajlova ne dodaje sadržaj dokumenata. Za indeksiranje teksta potreban je pristup originalnim fajlovima.': 'Importing a file list does not add document content. Text indexing requires access to the original files.',
@@ -189,11 +198,11 @@
     'Direktorijum sa bazama kataloga ne može da se skenira.': 'the catalog data directory cannot be scanned',
     'Uvoz zahteva običan fajl izvoza.': 'import requires a regular export file',
     'Izvoz prelazi ograničenje uvoza od 2 GiB; podelite ga u manje izvoze.': 'export exceeds the 2 GiB import limit; split it into smaller exports',
-    'Koristite CSV, TSV, EFU ili podržani XML izveštaj; WinCatalog bazu prvo izvezite.': 'use a CSV, TSV, EFU, or supported XML report; a native WinCatalog database must be exported first',
+    'Koristite WinCatalog .w3cat bazu ili CSV, TSV, EFU ili podržani XML izveštaj.': 'use a WinCatalog .w3cat database or a CSV, TSV, EFU, or supported XML report',
     'Nisu pronađeni zapisi fajlova; uključite kolone sa nazivom i putanjom fajla.': 'no file records found; include filename and file path columns in the export',
     'Neprepoznate CSV kolone; uključite Filename i File Path (i Disk ili Volume Label za više medija).': 'unrecognized CSV headers; include Filename and File Path (plus Disk or Volume Label for multiple media)',
     'Unesite vrednost u ovo polje.': 'Fill in this field.', 'Unesite najmanje {count} znakova.': 'Enter at least {count} characters.',
-    '/run/media/korisnik/Arhiva': '/run/media/user/Archive', '/home/korisnik/WinCatalog.csv': '/home/user/WinCatalog.csv',
+    '/run/media/korisnik/Arhiva': '/run/media/user/Archive', '/home/korisnik/Katalog.w3cat': '/home/user/Catalog.w3cat',
     '/run/media/korisnik/USB/AllFiles': '/run/media/user/USB/AllFiles',
   };
   const reverse = new Map(Object.entries(english).map(([sr, en]) => [en, sr]));

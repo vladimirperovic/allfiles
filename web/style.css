@@ -1095,3 +1095,23 @@ html,body{background:var(--canvas)}
 #source-cards[data-media-view=list] .add-source-card{flex-wrap:wrap;gap:8px}
 #source-cards[data-media-view=list] .add-source-card span{flex-basis:100%;text-align:center}
 }
+
+.details-thumb{display:block;max-width:100%;max-height:240px;margin:0 auto 16px;border-radius:10px;object-fit:contain;background:#00000030}
+.detail-section{margin-top:18px;padding-top:14px;border-top:1px solid #eddbff16}
+.detail-section h3{font-size:14px;font-weight:550;color:#fff;margin:0 0 10px}
+.detail-section .detail-metadata{border-top:0;padding-top:0}
+.detail-rating{margin:0;color:var(--coral-light);letter-spacing:2px;font-size:16px}
+.detail-comment{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.7;color:#f8efff}
+.tag-list{display:flex;flex-wrap:wrap;gap:6px}
+.tag-chip{background:#eddbff16;border:1px solid #eddbff30;color:#fff;border-radius:999px;padding:3px 10px;font:inherit;font-size:12px;cursor:pointer}
+.tag-chip:hover{background:#eddbff2a}
+.tag-filter-chip{align-self:center;white-space:nowrap}
+
+.folder-bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px;margin:0 0 10px;font-size:13px}
+.crumb{background:none;border:0;color:#f0daff;font:inherit;padding:3px 6px;border-radius:6px;cursor:pointer}
+button.crumb:hover{background:#eddbff1c}
+.crumb.current{color:#fff;font-weight:550;padding:3px 6px}
+.crumb-separator{color:#cba5eb}
+.file-type-icon.folder{color:#ffd9a0;background:#d9a14a1f;border-color:#f0c47a30}
+.folder-row .file-name{font-weight:550}
+.row-open{background:none;border:0;color:inherit;padding:4px;cursor:pointer;display:inline-flex}

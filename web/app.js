@@ -7,7 +7,7 @@
   const t = i18n.t;
   const kindNames = { computer: 'Računar', external: 'Eksterni disk', bluray: 'Blu-ray / DVD', lto: 'LTO kaseta', folder: 'Folder' };
   const kindIcons = { computer: 'laptop', external: 'drive', bluray: 'disc', lto: 'drive', folder: 'folder' };
-  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
+  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, tag: '', folder: '', explorer: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
   let sourceViews = new Map(), sourcesRenderKey = null;
   let contentWarning = null;
   let exportRequestPayload = null;
@@ -379,7 +379,70 @@
     closeDetails();
     runSearch();
   }
+  function setTagFilter(tag) {
+    state.tag = tag;
+    const chip = $('#tag-filter');
+    chip.hidden = !tag;
+    chip.textContent = tag ? `${t('Oznaka: {tag}', { tag })} ×` : '';
+    chip.title = t('Ukloni filter oznake');
+    searchChanged(true);
+  }
+  $('#tag-filter').addEventListener('click', () => setTagFilter(''));
+  // With one medium chosen and nothing else narrowing the list, show it like a file manager: folders, then files.
+  function explorerSource() {
+    const source = $('#source-filter').value;
+    return source && !$('#search-input').value.trim() && !$('#ext-filter').value && !state.tag && state.mode === 'files' && $('#sort-select').value === 'name' ? source : '';
+  }
+  function openFolder(path) {
+    state.folder = path;
+    state.offset = 0;
+    resetResultsScroll = true;
+    closeDetails();
+    state.searchPending = true;
+    updatePaginationControls();
+    runSearch();
+  }
+  function parentPath(path) { const cut = path.lastIndexOf('/'); return cut < 0 ? '' : path.slice(0, cut); }
+  function renderFolderBar() {
+    const bar = $('#folder-bar');
+    const explorer = state.explorer;
+    bar.hidden = !explorer;
+    bar.replaceChildren();
+    if (!explorer) return;
+    const parts = explorer.path ? explorer.path.split('/') : [];
+    const crumb = (label, path, current) => {
+      if (current) { const here = element('span', 'crumb current', label); here.setAttribute('aria-current', 'location'); return here; }
+      const button = element('button', 'crumb', label); button.type = 'button'; button.addEventListener('click', () => openFolder(path)); return button;
+    };
+    bar.append(crumb(explorer.label || t('Medij'), '', parts.length === 0));
+    parts.forEach((part, index) => { bar.append(element('span', 'crumb-separator', '›'), crumb(part, parts.slice(0, index + 1).join('/'), index === parts.length - 1)); });
+  }
+  function folderRow(item, up = false) {
+    const row = element('tr', 'file-row folder-row'); row.tabIndex = 0;
+    const target = up ? parentPath(state.explorer.path) : item.path;
+    const label = up ? t('Nazad') : item.name;
+    row.setAttribute('aria-label', up ? t('Nazad, jedan nivo gore. Dvoklik ili Enter otvara folder.') : t('Folder {name}, {count} fajlova. Dvoklik ili Enter otvara folder.', { name: item.name, count: i18n.formats.number.format(item.files) }));
+    const nameCell = element('td'); const cell = element('div', 'file-cell'); const block = element('div', 'file-name-block');
+    const name = element('span', 'file-name', up ? '..' : item.name); name.title = label;
+    block.append(name);
+    if (!up) block.append(element('span', 'file-path', t('{count} fajlova', { count: i18n.formats.number.format(item.files) })));
+    const marker = element('span', 'file-type-icon folder'); marker.append(icon('folder'));
+    cell.append(marker, block); nameCell.append(cell);
+    const sourceCell = element('td'); const sourceText = element('div', 'source-table-cell'); if (!up) { sourceText.append(icon(kindIcons[state.explorer.kind] || 'drive'), element('span', '', state.explorer.label || '—')); sourceCell.append(sourceText); }
+    const openCell = element('td'); const open = element('button', 'row-open'); open.type = 'button'; open.setAttribute('aria-label', t('Otvori folder')); open.append(icon('chevron', 'row-chevron')); open.addEventListener('click', event => { event.stopPropagation(); openFolder(target); }); openCell.append(open);
+    row.append(nameCell, sourceCell, element('td', 'size-column', up ? '' : fmtBytes(item.size)), element('td', 'date-column', ''), openCell);
+    row.addEventListener('click', () => { $$('.file-row').forEach(other => other.classList.toggle('selected', other === row)); });
+    row.addEventListener('dblclick', () => openFolder(target));
+    row.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === 'ArrowRight') { event.preventDefault(); openFolder(target); }
+      if ((event.key === 'Backspace' || event.key === 'ArrowLeft') && state.explorer.path) { event.preventDefault(); openFolder(parentPath(state.explorer.path)); }
+      if (event.key === 'ArrowDown') { event.preventDefault(); row.nextElementSibling?.focus(); }
+      if (event.key === 'ArrowUp') { event.preventDefault(); row.previousElementSibling?.focus(); }
+    });
+    return row;
+  }
   function searchChanged(immediate = false) {
+    state.folder = '';
     state.offset = 0;
     resetResultsScroll = true;
     closeDetails();
@@ -402,6 +465,7 @@
     updatePaginationControls();
     const query = $('#search-input').value.trim();
     const params = new URLSearchParams({ q: query, mode: state.mode, source: $('#source-filter').value, ext: $('#ext-filter').value, sort: $('#sort-select').value, offset: String(state.offset), limit: String(state.limit) });
+    if (state.tag) params.set('tag', state.tag);
     $('#results-panel').setAttribute('aria-busy', 'true');
     const delayedLoading = setTimeout(() => {
       if (state.closed || state.searchController !== controller) return;
@@ -412,9 +476,16 @@
       $('#table-footer').hidden = true;
     }, 250);
     try {
-      const result = await api(`/api/search?${params}`, { signal: controller.signal });
+      const folderSource = explorerSource();
+      const result = await api(folderSource ? `/api/folder?${new URLSearchParams({ source: folderSource, path: state.folder, offset: String(state.offset), limit: String(state.limit) })}` : `/api/search?${params}`, { signal: controller.signal });
       if (state.closed || state.searchController !== controller) return;
-      state.results = Array.isArray(result.results) ? result.results : [];
+      if (folderSource) {
+        state.explorer = { source: folderSource, path: String(result.path || ''), label: result.source?.label || '', kind: result.source?.kind || '' };
+        state.results = [...(Array.isArray(result.folders) ? result.folders.map(folder => ({ ...folder, isFolder: true })) : []), ...(Array.isArray(result.files) ? result.files : [])];
+      } else {
+        state.explorer = null;
+        state.results = Array.isArray(result.results) ? result.results : [];
+      }
       state.total = Number(result.total) || 0;
       state.searchError = '';
       state.searchRetry = false;
@@ -465,14 +536,24 @@
     $('#results-title').firstChild.textContent = t($('#search-input').value.trim() ? 'Rezultati pretrage' : $('#source-filter').value ? 'Fajlovi na mediju' : state.mode === 'content' ? 'Sadržaj dokumenata' : 'Svi fajlovi') + ' ';
     $('#search-timing').textContent = Number.isFinite(state.elapsed) ? `${i18n.formats.decimal.format(state.elapsed)} ms` : '';
     const rows = $('#file-rows'); rows.replaceChildren();
-    const completelyEmpty = state.status?.files === 0 && !$('#search-input').value.trim() && !$('#source-filter').value && !$('#ext-filter').value;
+    const completelyEmpty = state.status?.files === 0 && !$('#search-input').value.trim() && !$('#source-filter').value && !$('#ext-filter').value && !state.tag;
     $('#empty-state').hidden = !completelyEmpty;
     $('#no-results').hidden = completelyEmpty || state.results.length > 0;
     $('#no-results h3').textContent = t('Nema rezultata za ovu pretragu.');
     $('#no-results p').textContent = state.mode === 'content' ? t('Pretražuju se samo dokumenti sa indeksiranim tekstom. Pokušajte drugi pojam ili proverite indeksiranje.') : t('Pokušajte sa drugim nazivom ili uklonite filtere.');
     $('#table-scroll').hidden = state.results.length === 0;
     $('#table-footer').hidden = state.results.length === 0;
+    renderFolderBar();
+    if (state.explorer && state.explorer.path && state.offset === 0) rows.append(folderRow(null, true));
+    if (state.explorer && state.results.length === 0) {
+      $('#no-results h3').textContent = t('Ovaj folder je prazan.');
+      $('#no-results p').textContent = '';
+      $('#no-results').hidden = completelyEmpty;
+      $('#table-scroll').hidden = !state.explorer.path;
+      $('#table-footer').hidden = true;
+    }
     state.results.forEach(file => {
+      if (file.isFolder) { rows.append(folderRow(file)); return; }
       const row = element('tr', `file-row${state.selected === file.id ? ' selected' : ''}`);
       row.tabIndex = 0;
       row.setAttribute('aria-label', t('{name}, {source}, {size}. Prikaži detalje.', { name: file.name, source: file.source_label || t('Medij'), size: fmtBytes(file.size) }));
@@ -497,7 +578,7 @@
       rows.append(row);
     });
     const end = Math.min(state.offset + state.results.length, state.total);
-    $('#pagination-summary').textContent = t('{start}–{end} od {total} fajlova', { start: i18n.formats.number.format(state.offset + 1), end: i18n.formats.number.format(end), total: i18n.formats.number.format(state.total) });
+    $('#pagination-summary').textContent = t(state.explorer ? '{start}–{end} od {total} stavki' : '{start}–{end} od {total} fajlova', { start: i18n.formats.number.format(state.offset + 1), end: i18n.formats.number.format(end), total: i18n.formats.number.format(state.total) });
     $('#page-number').textContent = i18n.formats.number.format(Math.floor(state.offset / state.limit) + 1);
     updatePaginationControls();
   }
@@ -600,6 +681,8 @@
     const top = element('div', 'details-top'); top.append(element('span', '', t('DETALJI FAJLA')));
     const close = element('button', 'icon-button'); close.dataset.detailAction = 'close'; close.setAttribute('aria-label', t('Zatvori detalje')); close.append(icon('close')); close.addEventListener('click', closeDetails); top.append(close);
     panel.append(top, typeIcon(file, 'details-file-icon'), element('h3', 'details-name', file.name), element('div', 'details-type', `${extension(file).toUpperCase() || t('FAJL')} · ${fmtBytes(file.size)}`));
+    const thumbnail = detailsThumbnail(response?.details, file);
+    if (thumbnail) panel.append(thumbnail);
     const metadata = element('dl', 'detail-metadata');
     [[t('Medij'), file.source_label || '—'], [t('Lokacija'), file.location || t('Nije uneta')], [t('Izmenjeno'), fmtDate(file.modified)]].forEach(([label, value]) => {
       const pair = element('div'); pair.append(element('dt', '', label), element('dd', '', value)); metadata.append(pair);
@@ -613,6 +696,7 @@
       try { await navigator.clipboard.writeText(file.path || file.relative_path || ''); toast(t('Putanja je kopirana.')); } catch { toast(t('Browser nije dozvolio kopiranje. Putanju možete označiti u detaljima.'), true); }
     }); panel.append(copy);
     panel.append(element('p', 'detail-note', t('Za otvaranje je potrebno da originalni medij bude priključen i putanja dostupna.')));
+    detailsSections(response?.details).forEach(section => panel.append(section));
     const preview = element('section', 'text-preview'); const title = element('h3'); title.append(icon('text'), document.createTextNode(t('Sadržaj dokumenta'))); preview.append(title);
     const text = response?.text;
     if (loading) preview.append(element('p', '', t('Učitavam sačuvani tekst…')));
@@ -631,6 +715,68 @@
     }
     panel.append(preview);
     syncDetailsMode(focus || keepFocus, focusedAction);
+  }
+  // Thumbnails arrive as data URIs of the two image types the server stores; anything else is ignored.
+  function detailsThumbnail(details, file) {
+    const source = details?.thumbnail;
+    if (typeof source !== 'string' || !/^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/.test(source)) return null;
+    const image = element('img', 'details-thumb'); image.alt = file.name; image.src = source; image.decoding = 'async';
+    return image;
+  }
+  function detailRows(rows) {
+    const list = element('dl', 'detail-metadata');
+    rows.forEach(([label, value]) => {
+      if (value === undefined || value === null || value === '') return;
+      const pair = element('div'); pair.append(element('dt', '', label), element('dd', '', value)); list.append(pair);
+    });
+    return list.childElementCount ? list : null;
+  }
+  function detailsSection(title, ...content) {
+    const items = content.filter(Boolean); if (!items.length) return null;
+    const section = element('section', 'detail-section'); section.append(element('h3', '', title), ...items);
+    return section;
+  }
+  function fmtDuration(seconds) {
+    const total = Math.round(Number(seconds)); if (!Number.isFinite(total) || total <= 0) return '';
+    const minutes = Math.floor(total / 60), rest = String(total % 60).padStart(2, '0');
+    return minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${rest}` : `${minutes}:${rest}`;
+  }
+  function detailsSections(details) {
+    if (!details) return [];
+    const sections = [];
+    const rating = Number(details.rating);
+    if (rating >= 1 && rating <= 5) {
+      const stars = element('p', 'detail-rating', '★'.repeat(rating) + '☆'.repeat(5 - rating)); stars.setAttribute('role', 'img'); stars.setAttribute('aria-label', `${t('Ocena')}: ${rating}/5`);
+      sections.push(detailsSection(t('Ocena'), stars));
+    }
+    if (Array.isArray(details.tags) && details.tags.length) {
+      const list = element('div', 'tag-list');
+      details.tags.forEach(tag => {
+        const chip = element('button', 'tag-chip', tag); chip.type = 'button'; chip.title = t('Prikaži fajlove sa ovom oznakom');
+        chip.addEventListener('click', () => setTagFilter(tag)); list.append(chip);
+      });
+      sections.push(detailsSection(t('Oznake'), list));
+    }
+    if (details.comment) sections.push(detailsSection(t('Komentar'), element('p', 'detail-comment', details.comment)));
+    const exif = details.exif;
+    if (exif) {
+      const flash = { fired: t('Opalio'), not_fired: t('Nije opalio') }[exif.flash] || '';
+      sections.push(detailsSection(t('Fotografija'), detailRows([
+        [t('Kamera'), exif.camera], [t('Objektiv'), exif.lens], [t('Snimljeno'), exif.taken],
+        [t('Dimenzije'), exif.width && exif.height ? `${exif.width} × ${exif.height}` : ''], ['ISO', exif.iso],
+        [t('Ekspozicija'), exif.exposure], [t('Blenda'), exif.aperture], [t('Žižna daljina'), exif.focal_length], [t('Blic'), flash], ['GPS', exif.gps],
+      ])));
+    }
+    const audio = details.audio;
+    if (audio) {
+      sections.push(detailsSection('Audio', detailRows([
+        [t('Naslov'), audio.title], [t('Izvođač'), audio.artist], ['Album', audio.album], [t('Godina'), audio.year], [t('Broj numere'), audio.track],
+        [t('Žanr'), audio.genre], [t('Trajanje'), fmtDuration(audio.duration)], [t('Protok'), audio.bitrate ? `${Math.round(audio.bitrate / 1000)} kbps` : ''],
+        [t('Kanali'), audio.channels], [t('Frekvencija'), audio.sample_rate ? `${i18n.formats.decimal.format(audio.sample_rate / 1000)} kHz` : ''],
+      ])));
+    }
+    if (details.crc32) sections.push(detailsSection('CRC32', element('p', 'detail-comment', details.crc32)));
+    return sections.filter(Boolean);
   }
   async function openOriginal(id, folder) {
     try { await api('/api/open', { method: 'POST', body: { id, folder } }); toast(folder ? t('Folder je otvoren na ovom računaru.') : t('Fajl je poslat podrazumevanoj aplikaciji.')); } catch (error) { toast(error.message, true); }
@@ -832,7 +978,7 @@
   $('#search-input').addEventListener('keydown', event => { if (event.key === 'Enter') { event.preventDefault(); searchChanged(true); } });
   $('#clear-search').addEventListener('click', () => { $('#search-input').value = ''; searchChanged(true); $('#search-input').focus(); });
   ['#source-filter', '#ext-filter', '#sort-select'].forEach(selector => $(selector).addEventListener('change', () => searchChanged(true)));
-  $('#reset-filters').addEventListener('click', () => { $('#search-input').value = ''; $('#source-filter').value = ''; $('#ext-filter').value = ''; searchChanged(true); });
+  $('#reset-filters').addEventListener('click', () => { $('#search-input').value = ''; $('#source-filter').value = ''; $('#ext-filter').value = ''; setTagFilter(''); });
   $('#previous-page').addEventListener('click', () => changePage(-1));
   $('#next-page').addEventListener('click', () => changePage(1));
   $('#first-page').addEventListener('click', () => goToPage(1));

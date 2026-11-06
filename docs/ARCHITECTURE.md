@@ -12,7 +12,8 @@ AllFiles is a Rust executable with an embedded HTML/CSS/JavaScript interface and
 | `src/fts_tokens.rs` | SQLite's `unicode61` tokenizer for content snippet matching |
 | `src/scanner.rs` | Filesystem traversal, incremental metadata/content batches and progress |
 | `src/extract.rs` | Bounded text extraction from supported PDF, Office, OpenDocument and text files |
-| `src/import.rs` | Validation and streaming CSV/TSV, EFU and recognized XML import |
+| `src/import.rs`, `src/w3cat.rs` | Validation and streaming CSV/TSV, EFU, recognized XML and native WinCatalog (`.w3cat`, read-only) import |
+| `src/details.rs` | Optional per-file details from a source: thumbnail, EXIF, audio tags, tags, rating, comment, CRC32 |
 | `src/crypto.rs`, `src/encrypted_vfs.rs` | Password-derived keys, encryption manifest and encrypted SQLite file access |
 | `src/mcp.rs` | `stdio` JSON-RPC tools forwarded to the existing local HTTP service |
 | `web/` | Shared Serbian/English interface, state recovery, document preview and optional particles |
@@ -24,8 +25,8 @@ The public browser demo is a separate static simulation. It must not start a ser
 
 ```text
 data/
-  catalog.sqlite     media, directories, files, search indexes and counters
-  content.sqlite     compressed text, document links and content FTS index
+  catalog.sqlite     media, directories, files, search indexes, counters, tags and EXIF/audio details
+  content.sqlite     compressed text, document links, content FTS index and thumbnails
   encryption.json    required key-derivation metadata for encrypted catalogs
   .allfiles.lock     operating-system lock for this data directory
 ```
