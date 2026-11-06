@@ -7,7 +7,7 @@
   const t = i18n.t;
   const kindNames = { computer: 'Računar', external: 'Eksterni disk', bluray: 'Blu-ray / DVD', lto: 'LTO kaseta', folder: 'Folder' };
   const kindIcons = { computer: 'laptop', external: 'drive', bluray: 'disc', lto: 'drive', folder: 'folder' };
-  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, tag: '', folder: '', explorer: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
+  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, tag: '', folder: '', folderSource: '', explorer: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
   let sourceViews = new Map(), sourcesRenderKey = null;
   let contentWarning = null;
   let exportRequestPayload = null;
@@ -466,6 +466,9 @@
     const query = $('#search-input').value.trim();
     const params = new URLSearchParams({ q: query, mode: state.mode, source: $('#source-filter').value, ext: $('#ext-filter').value, sort: $('#sort-select').value, offset: String(state.offset), limit: String(state.limit) });
     if (state.tag) params.set('tag', state.tag);
+    // The open folder belongs to one medium; another medium (or the flat list) starts at its root.
+    const folderSource = explorerSource();
+    if (folderSource !== state.folderSource) { state.folder = ''; state.folderSource = folderSource; }
     $('#results-panel').setAttribute('aria-busy', 'true');
     const delayedLoading = setTimeout(() => {
       if (state.closed || state.searchController !== controller) return;
@@ -476,7 +479,6 @@
       $('#table-footer').hidden = true;
     }, 250);
     try {
-      const folderSource = explorerSource();
       const result = await api(folderSource ? `/api/folder?${new URLSearchParams({ source: folderSource, path: state.folder, offset: String(state.offset), limit: String(state.limit) })}` : `/api/search?${params}`, { signal: controller.signal });
       if (state.closed || state.searchController !== controller) return;
       if (folderSource) {
@@ -504,6 +506,8 @@
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (state.closed || state.searchController !== controller) return;
+      // The folder vanished (for example after a rescan): fall back to the medium's root.
+      if (folderSource && state.folder && error.status === 404) { state.folder = ''; state.offset = 0; return runSearch(); }
       state.searchError = error.message;
       state.searchRetry = !error.status || error.status >= 500;
       $('#file-rows').replaceChildren();

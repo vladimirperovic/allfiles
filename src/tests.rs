@@ -1631,7 +1631,13 @@ fn folder_view_lists_subfolders_before_files_and_pages_over_both() -> anyhow::Re
     }
     assert_eq!(all, ["Docs", "Docs 2", "photos", "alpha.txt", "zeta.txt"]);
 
-    assert!(view(&mut s, "Nope", 0, 10).is_err());
+    // A missing folder is reported as "not found" (HTTP 404), not a generic error.
+    let missing = view(&mut s, "Nope", 0, 10).unwrap_err();
+    assert!(
+        missing
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    );
     assert!(
         s.folder_with_cancel("missing", "", 0, 10, &|| false)
             .is_err()

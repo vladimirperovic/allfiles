@@ -1361,7 +1361,9 @@ impl Store {
         if path.is_empty() && total_folders == 0 && total_files == 0 {
             // An empty medium is fine; an unknown sub-folder is not.
         } else if !path.is_empty() && total_folders == 0 && total_files == 0 {
-            bail!("Folder not found");
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::NotFound, "Folder not found").into(),
+            );
         }
         let page_folders: Vec<Value> = folders
             .iter()
