@@ -1543,6 +1543,54 @@ fn file_details_are_stored_found_by_tag_bound_to_the_version_and_removed_with_th
         view["details"]["tags"],
         serde_json::json!(["5 Stars", "Trip"])
     );
+    // A source that does supply details replaces them: what it no longer
+    // has for a file is removed, and an unchanged thumbnail is not rewritten.
+    let mut current = photo.clone();
+    current.size += 1;
+    let extra = current.extra.as_mut().unwrap();
+    extra.rating = None;
+    extra.comment.clear();
+    extra.crc32.clear();
+    extra.tags = vec!["Trip".into()];
+    s.upsert(&src.id, "scan2b", &[current.clone(), other.clone()])?;
+    let view = s.file_with_cancel(id, 0, 0, &|| false)?;
+    assert_eq!(view["details"]["tags"], serde_json::json!(["Trip"]));
+    assert!(view["details"].get("rating").is_none());
+    assert!(view["details"].get("comment").is_none());
+    assert_eq!(view["details"]["exif"]["camera"], "Olympus E-PL1");
+    assert!(view["details"]["thumbnail"].is_string());
+    s.conn.execute_batch(
+        "CREATE TEMP TABLE thumbnail_writes(file_id);
+         CREATE TEMP TRIGGER thumbnail_written AFTER INSERT ON content.thumbnails
+         BEGIN INSERT INTO thumbnail_writes VALUES(new.file_id); END;",
+    )?;
+    let writes = |s: &Store| -> anyhow::Result<i64> {
+        Ok(s.conn
+            .query_row("SELECT count(*) FROM temp.thumbnail_writes", [], |r| {
+                r.get(0)
+            })?)
+    };
+    s.upsert(&src.id, "scan2c", &[current.clone(), other.clone()])?;
+    assert_eq!(writes(&s)?, 0, "an identical thumbnail was rewritten");
+    // A different picture of the same length is still replaced.
+    current.extra.as_mut().unwrap().thumbnail =
+        Thumbnail::new(vec![0xff, 0xd8, 0xff, 0xe0, 9, 9, 9]);
+    s.upsert(&src.id, "scan2d", &[current.clone(), other.clone()])?;
+    assert_eq!(writes(&s)?, 1);
+    let picture: Vec<u8> = s.conn.query_row(
+        "SELECT data FROM content.thumbnails WHERE file_id=?",
+        [id],
+        |r| r.get(0),
+    )?;
+    assert_eq!(picture, [0xff, 0xd8, 0xff, 0xe0, 9, 9, 9]);
+    // Empty extras from such a source clear everything for that file.
+    current.extra = Some(Box::default());
+    s.upsert(&src.id, "scan2e", &[current, other.clone()])?;
+    s.finish_scan(&src.id, "scan2e", true)?;
+    assert_eq!(
+        s.file_with_cancel(id, 0, 0, &|| false)?["details"],
+        serde_json::json!({})
+    );
     // A file that disappears takes its details, tags and thumbnail with it.
     s.upsert(&src.id, "scan3", std::slice::from_ref(&other))?;
     s.finish_scan(&src.id, "scan3", true)?;
@@ -1642,5 +1690,160 @@ fn folder_view_lists_subfolders_before_files_and_pages_over_both() -> anyhow::Re
         s.folder_with_cancel("missing", "", 0, 10, &|| false)
             .is_err()
     );
+    Ok(())
+}
+#[test]
+fn rescan_keeps_unnamed_settings_and_rejects_unknown_kinds() -> anyhow::Result<()> {
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    let temp = tempfile::tempdir()?;
+    let (data, root) = (temp.path().join("data"), temp.path().join("Archive"));
+    fs::create_dir(&data)?;
+    fs::create_dir(&root)?;
+    fs::write(root.join("a.bin"), "x")?;
+    let s = Arc::new(Mutex::new(Store::open(&data, "")?));
+    let cancel = AtomicBool::new(false);
+    let scan = |o: ScanOptions| crate::scanner::scan(&s, o, &cancel, &|_| {});
+    let at_root = || ScanOptions {
+        root: root.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    let only = || -> anyhow::Result<Source> {
+        let mut all = s.lock().unwrap().all_sources()?;
+        assert_eq!(all.len(), 1);
+        Ok(all.remove(0))
+    };
+
+    // A typo must not create a medium that no kind filter can find.
+    let typo = scan(ScanOptions {
+        kind: "blu-ray".into(),
+        ..at_root()
+    });
+    assert!(typo.unwrap_err().to_string().contains("Unknown media kind"));
+    assert!(s.lock().unwrap().all_sources()?.is_empty());
+
+    scan(ScanOptions {
+        kind: "external".into(),
+        location: Some("Shelf 2".into()),
+        ..at_root()
+    })?;
+    let first = only()?;
+    assert_eq!(
+        (
+            first.label.as_str(),
+            first.kind.as_str(),
+            first.location.as_str()
+        ),
+        ("Archive", "external", "Shelf 2")
+    );
+    // The same command without --kind and --location, as a later rescan.
+    scan(at_root())?;
+    let again = only()?;
+    assert_eq!(again.id, first.id);
+    assert_eq!(
+        (again.kind.as_str(), again.location.as_str()),
+        ("external", "Shelf 2")
+    );
+    // By ID with a blank label, as an API client may send it.
+    scan(ScanOptions {
+        source_id: first.id.clone(),
+        label: "  ".into(),
+        kind: "lto".into(),
+        ..at_root()
+    })?;
+    let by_id = only()?;
+    assert_eq!(
+        (
+            by_id.label.as_str(),
+            by_id.kind.as_str(),
+            by_id.location.as_str()
+        ),
+        ("Archive", "lto", "Shelf 2")
+    );
+    // An empty location is a deliberate "clear it" from the interface.
+    scan(ScanOptions {
+        source_id: first.id.clone(),
+        location: Some(String::new()),
+        ..at_root()
+    })?;
+    assert_eq!(only()?.location, "");
+
+    // A new medium without a kind is a plain folder, as in the interface.
+    let other = temp.path().join("Other");
+    fs::create_dir(&other)?;
+    scan(ScanOptions {
+        root: other.to_string_lossy().into_owned(),
+        ..Default::default()
+    })?;
+    let sources = s.lock().unwrap().all_sources()?;
+    assert_eq!(
+        sources.iter().find(|x| x.label == "Other").unwrap().kind,
+        "folder"
+    );
+    Ok(())
+}
+#[test]
+fn folder_view_reaches_files_imported_with_absolute_paths() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut s = Store::open(temp.path(), "")?;
+    let src = s.begin_scan(&ScanOptions {
+        root: "import://absolute".into(),
+        label: "Export".into(),
+        kind: "bluray".into(),
+        ..Default::default()
+    })?;
+    let at = |dir: &str, name: &str| ScannedFile {
+        dir: dir.into(),
+        ..entry(name)
+    };
+    // The folders an export with POSIX, UNC and relative paths produces.
+    let files = [
+        at("/", "root.txt"),
+        at("/home/user", "a.txt"),
+        at("/home/user/docs", "b.txt"),
+        at("//server/share", "net.txt"),
+        at("rel", "r.txt"),
+    ];
+    s.upsert(&src.id, "scan", &files)?;
+    s.finish_scan(&src.id, "scan", true)?;
+    let view = |s: &mut Store, path: &str| s.folder_with_cancel(&src.id, path, 0, 100, &|| false);
+    let names = |v: &serde_json::Value, key: &str| -> Vec<String> {
+        v[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // Walk the whole tree from the root the way the interface does.
+    let (mut pending, mut found) = (vec![String::new()], Vec::new());
+    while let Some(path) = pending.pop() {
+        let level = view(&mut s, &path)?;
+        assert_eq!(level["path"], path);
+        found.extend(names(&level, "files"));
+        for folder in level["folders"].as_array().unwrap() {
+            pending.push(folder["path"].as_str().unwrap().to_owned());
+        }
+    }
+    found.sort();
+    assert_eq!(found, ["a.txt", "b.txt", "net.txt", "r.txt", "root.txt"]);
+
+    let root = view(&mut s, "")?;
+    assert_eq!(names(&root, "folders"), ["/", "//server", "/home", "rel"]);
+    assert_eq!(root["folders"][2]["files"], 2);
+    let slash = view(&mut s, "/")?;
+    assert!(names(&slash, "folders").is_empty());
+    assert_eq!(names(&slash, "files"), ["root.txt"]);
+    let home = view(&mut s, "/home/")?;
+    assert_eq!(home["path"], "/home");
+    assert_eq!(home["folders"][0]["path"], "/home/user");
+    assert_eq!(
+        view(&mut s, "//server")?["folders"][0]["path"],
+        "//server/share"
+    );
+    // A stray leading separator still finds an ordinary relative folder.
+    let relative = view(&mut s, "/rel")?;
+    assert_eq!(relative["path"], "rel");
+    assert_eq!(names(&relative, "files"), ["r.txt"]);
+    assert!(view(&mut s, "/nope").is_err());
     Ok(())
 }

@@ -1,6 +1,6 @@
 # GitHub Pages dashboard demo
 
-The demo opens the actual AllFiles dashboard in English with 420 invented files on seven media: one LTO tape, three Blu-ray discs, one computer and two external disks. Search, content previews, filters, sorting, pagination and English/Serbian switching run in the browser. A one-time migration sets existing demo sessions to English; later language choices remain saved.
+The demo opens the actual AllFiles dashboard in English with 420 invented files on seven media: one LTO tape, three Blu-ray discs, one computer and two external disks. Search, the folder view of a medium, content previews, filters, sorting, pagination and English/Serbian switching run in the browser. A one-time migration sets existing demo sessions to English; later language choices remain saved.
 
 Build with Python 3.11 or newer:
 
@@ -8,7 +8,7 @@ Build with Python 3.11 or newer:
 python scripts/build-demo.py --output dist/pages
 ```
 
-The version comes from `Cargo.toml`; `--version 0.1.5` can override it. The builder copies the production assets without changing them, injects this directory's demo adapter and styles, and writes a source-hash manifest. It refuses unexpected files in the output directory so unrelated data cannot enter the Pages artifact. Generated output is ignored by Git.
+The version comes from `Cargo.toml`; `--version 0.1.6` can override it. The builder copies the production assets without changing them, injects this directory's demo adapter and styles, and writes a source-hash manifest. It refuses unexpected files in the output directory so unrelated data cannot enter the Pages artifact. Generated output is ignored by Git.
 
 `adapter.js` answers the dashboard's read requests with deterministic synthetic records in memory. It has no network fallback. Desktop operations display a short explanation, and writes are rejected. No real files, credentials, databases or user catalogs are included. A restrictive Content Security Policy also disables network connections and form submissions.
 

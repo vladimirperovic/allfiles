@@ -209,9 +209,9 @@ pub fn read(
                     text(r.get_ref(6)?),
                     text(r.get_ref(7)?),
                 )?;
-                if !extra.is_empty() {
-                    record.file.extra = Some(Box::new(extra));
-                }
+                // Also when empty: a file that lost its tags, rating or
+                // picture in WinCatalog loses them here on the next import.
+                record.file.extra = Some(Box::new(extra));
             }
             emit(record)?;
         }
@@ -655,8 +655,8 @@ mod tests {
         assert_eq!(epub.audio.track, Some(9));
         assert_eq!(epub.audio.duration, Some(286.639));
         assert_eq!(epub.audio.bitrate, Some(192016));
-        // Rows with only empty values add nothing.
-        assert!(found["on-b.txt"].is_none());
+        // Rows with only empty values carry no details.
+        assert!(found["on-b.txt"].as_ref().unwrap().is_empty());
         // The validation pass does not read details.
         read(&path, &AtomicBool::new(false), false, &mut |r| {
             assert!(r.file.extra.is_none());

@@ -7,7 +7,7 @@
   const t = i18n.t;
   const kindNames = { computer: 'Računar', external: 'Eksterni disk', bluray: 'Blu-ray / DVD', lto: 'LTO kaseta', folder: 'Folder' };
   const kindIcons = { computer: 'laptop', external: 'drive', bluray: 'disc', lto: 'drive', folder: 'folder' };
-  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, detailsRequest: 0, detailsState: null, tag: '', folder: '', folderSource: '', explorer: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
+  const state = { token: null, instanceId: null, jobRevision: -1, statusEpoch: 0, status: null, sources: [], sourcesRequest: 0, sourcesController: null, sourcesPending: false, sourcesRetry: false, results: [], total: 0, offset: 0, limit: 60, mode: 'files', view: 'search', selected: null, searchController: null, searchPending: false, searchRetry: false, searchTimer: null, pollTimer: null, closed: false, busy: false, browsePath: '', browseResult: null, browseController: null, cancelling: null, detailsRequest: 0, detailsState: null, tag: '', folder: '', folderSource: '', explorer: null, ready: false, statusRefreshing: false, connected: true, connectionError: '', searchError: '', elapsed: null };
   let sourceViews = new Map(), sourcesRenderKey = null;
   let contentWarning = null;
   let exportRequestPayload = null;
@@ -50,7 +50,7 @@
     const parsed = new Date(typeof value === 'number' ? value * 1000 : value);
     return Number.isNaN(parsed.getTime()) ? '—' : i18n.formats.date.format(parsed);
   }
-  function jobRunning(job) { return Boolean(job && ['running', 'queued', 'pending', 'scanning', 'indexing', 'cancelling'].includes(job.status)); }
+  function jobRunning(job) { return job?.status === 'running'; }
   function extension(file) { return String(file.extension || file.name?.split('.').pop() || '').toLowerCase().replace(/^\./, ''); }
   function fileClass(file) {
     const ext = extension(file);
@@ -185,9 +185,9 @@
     renderJob(status.job);
     const finished = (state.ready || oldStatus) && status.job && !jobRunning(status.job) && (oldJob?.id !== status.job.id || jobRunning(oldJob));
     if (finished) {
-      if (status.job?.status === 'completed' || status.job?.status === 'done') toast(t('Katalog je osvežen. Novi fajlovi su spremni za pretragu.'));
-      if (status.job?.status === 'failed' || status.job?.status === 'error') toast(status.job.error || t('Indeksiranje nije završeno.'), true);
-      if (status.job?.status === 'cancelled' || status.job?.status === 'canceled') toast(t('Indeksiranje je zaustavljeno. Sačuvani podaci ostaju u katalogu.'));
+      if (status.job.status === 'completed') toast(t('Katalog je osvežen. Novi fajlovi su spremni za pretragu.'));
+      if (status.job.status === 'failed') toast(status.job.error || t('Indeksiranje nije završeno.'), true);
+      if (status.job.status === 'cancelled') toast(t('Indeksiranje je zaustavljeno. Sačuvani podaci ostaju u katalogu.'));
     }
     const changedCounts = oldStatus && ['files', 'sources', 'documents', 'bytes'].some(key => oldStatus[key] !== status[key]);
     if (finished || (state.ready && (firstStatus || instanceChanged || reconnected || (changedCounts && !state.busy)))) {
@@ -218,17 +218,19 @@
   }
   function renderJob(job) {
     const running = jobRunning(job);
-    const canceled = ['cancelled', 'canceled'].includes(job?.status);
-    const failed = ['failed', 'error'].includes(job?.status);
-    const done = ['completed', 'done'].includes(job?.status);
-    const phaseLabels = { scan: t('Skeniranje fajlova'), scanning: t('Skeniranje fajlova'), content: t('Indeksiranje sadržaja'), extracting: t('Izvlačenje teksta'), index: t('Indeksiranje sadržaja'), indexing: t('Indeksiranje sadržaja'), import: t('Uvoz kataloga'), importing: t('Uvoz kataloga'), finalize: t('Završavanje kataloga'), exporting: t('Izvoz baze'), queued: t('Priprema indeksiranja'), cancel: t('Zaustavljanje') };
+    const canceled = job?.status === 'cancelled';
+    const failed = job?.status === 'failed';
+    const done = job?.status === 'completed';
+    // The phases the service reports; anything else shows the general title.
+    const phaseLabels = { scanning: t('Skeniranje fajlova'), extracting: t('Izvlačenje teksta'), validating: t('Provera kataloga pre uvoza'), importing: t('Uvoz kataloga') };
     $('#job-title').textContent = running ? (phaseLabels[job.phase] || t('Indeksiranje je u toku')) : failed ? t('Indeksiranje nije završeno') : canceled ? t('Indeksiranje je zaustavljeno') : done ? t('Katalog je osvežen') : t('Spremno za indeksiranje');
     $('#job-description').textContent = running ? t('Možete nastaviti da pretražujete postojeći katalog.') : failed ? t('Proverite poruku ispod i pokušajte ponovo.') : done ? t('Novi podaci su dostupni u pretrazi.') : canceled ? t('Obrađeni podaci su sačuvani u katalogu.') : t('Dodajte medij ili osvežite postojeći katalog.');
     $('#job-status-badge').textContent = running ? t('U toku') : failed ? t('Greška') : canceled ? t('Zaustavljeno') : done ? t('Završeno') : t('Na čekanju');
     $('#job-status-badge').classList.toggle('running', running);
     $('#job-progress').hidden = !running;
     $('#cancel-job').hidden = !running;
-    $('#cancel-job').disabled = job?.status === 'cancelling';
+    // Stays disabled until the job it was pressed for has stopped.
+    $('#cancel-job').disabled = running && state.cancelling === job.id;
     $('#job-scanned').textContent = i18n.formats.number.format(job?.scanned || 0);
     $('#job-indexed').textContent = i18n.formats.number.format(job?.indexed || 0);
     $('#job-current').textContent = job?.current || '—';
@@ -402,14 +404,20 @@
     updatePaginationControls();
     runSearch();
   }
-  function parentPath(path) { const cut = path.lastIndexOf('/'); return cut < 0 ? '' : path.slice(0, cut); }
+  // Folders imported with absolute paths keep their leading slashes in the first part: "/home", "//server", "/".
+  function folderParts(path) {
+    const lead = /^\/*/.exec(path)[0], parts = path.slice(lead.length).split('/').filter(Boolean);
+    if (lead) parts[0] = lead + (parts[0] || '');
+    return parts;
+  }
+  function parentPath(path) { return folderParts(path).slice(0, -1).join('/'); }
   function renderFolderBar() {
     const bar = $('#folder-bar');
     const explorer = state.explorer;
     bar.hidden = !explorer;
     bar.replaceChildren();
     if (!explorer) return;
-    const parts = explorer.path ? explorer.path.split('/') : [];
+    const parts = folderParts(explorer.path);
     const crumb = (label, path, current) => {
       if (current) { const here = element('span', 'crumb current', label); here.setAttribute('aria-current', 'location'); return here; }
       const button = element('button', 'crumb', label); button.type = 'button'; button.addEventListener('click', () => openFolder(path)); return button;
@@ -714,7 +722,7 @@
     }
     else {
       const status = response?.text_status || file.text_status;
-      const statusMessages = { unsupported: t('Ovaj format nema podržano izvlačenje teksta.'), pending: t('Dokument čeka indeksiranje sadržaja.'), error: t('Tekst nije izvučen. Proverite dokument i ponovite indeksiranje.'), empty: t('U dokumentu nije pronađen čitljiv tekst. Za skenirani PDF može biti potreban OCR.'), indexed: t('U dokumentu nije pronađen čitljiv tekst.'), skipped: t('Sadržaj je preskočen zbog ograničenja veličine ili obrade.'), not_indexed: t('Uvezen je spisak fajlova. Za indeksiranje sadržaja potreban je pristup originalnom mediju.'), unavailable: t('Baza sadržaja nije dostupna u ovoj kopiji.') };
+      const statusMessages = { unsupported: t('Ovaj format nema podržano izvlačenje teksta.'), error: t('Tekst nije izvučen. Proverite dokument i ponovite indeksiranje.'), empty: t('U dokumentu nije pronađen čitljiv tekst. Za skenirani PDF može biti potreban OCR.'), indexed: t('U dokumentu nije pronađen čitljiv tekst.'), skipped: t('Sadržaj je preskočen zbog ograničenja veličine ili obrade.'), not_indexed: t('Uvezen je spisak fajlova. Za indeksiranje sadržaja potreban je pristup originalnom mediju.') };
       preview.append(element('p', '', t(response?.text_detail || statusMessages[status] || 'Sadržaj nije indeksiran. Uključite indeksiranje dokumenata kada je medij dostupan.')));
     }
     panel.append(preview);
@@ -828,7 +836,7 @@
   }
   async function startImport() {
     const requestInstance = state.instanceId;
-    const result = await api('/api/import', { method: 'POST', body: { path: $('#import-path').value.trim(), label: $('#import-label').value.trim(), kind: 'bluray', location: $('#import-location').value.trim() } });
+    const result = await api('/api/import', { method: 'POST', body: { path: $('#import-path').value.trim(), label: $('#import-label').value.trim(), location: $('#import-location').value.trim() } });
     if (state.closed) return;
     acceptJob(result, requestInstance);
     $('#import-dialog').close(); setView('index'); toast(t('Uvoz kataloga je pokrenut.'));
@@ -995,7 +1003,7 @@
   $('#export-dialog').addEventListener('close', clearExportSecrets);
   $('#export-dialog').addEventListener('cancel', clearExportSecrets);
   $('#browse-dialog').addEventListener('cancel', () => state.browseController?.abort());
-  $('#cancel-job').addEventListener('click', async () => { $('#cancel-job').disabled = true; try { await api('/api/cancel', { method: 'POST', body: {} }); toast(t('Zatraženo je zaustavljanje indeksiranja.')); await refreshStatus(); } catch (error) { toast(error.message, true); $('#cancel-job').disabled = false; } });
+  $('#cancel-job').addEventListener('click', async () => { state.cancelling = state.status?.job?.id; $('#cancel-job').disabled = true; try { await api('/api/cancel', { method: 'POST', body: {} }); toast(t('Zatraženo je zaustavljanje indeksiranja.')); await refreshStatus(); } catch (error) { toast(error.message, true); state.cancelling = null; $('#cancel-job').disabled = false; } });
   $('#browse-source').addEventListener('click', () => { openDialog('#browse-dialog'); browse($('#source-root').value.trim()); });
   $('#browse-form').addEventListener('submit', event => { event.preventDefault(); browse($('#browse-path').value.trim()); });
   $('#choose-folder').addEventListener('click', () => {

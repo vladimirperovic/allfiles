@@ -93,6 +93,29 @@
         const offset = number(params, 'offset', 0, 1000000), limit = number(params, 'limit', 60, 200) || 60;
         return json({ total: selected.length, results: selected.slice(offset, offset + limit).map(file => ({ ...file, snippet: query && mode !== 'files' && texts.has(file.id) ? texts.get(file.id).split('\n\n')[2].slice(0, 180) : '' })), offset, limit, elapsed_ms: Math.max(0.1, performance.now() - started) });
       }
+      if (endpoint === 'folder') {
+        // The same contract as the application's folder view: subfolders first, then the folder's own files.
+        const started = performance.now();
+        const source = sources.find(item => item.id === params.get('source'));
+        if (!source) return json({ error: 'Media not found' }, 404);
+        const path = (params.get('path') || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''), prefix = path ? `${path}/` : '';
+        const folders = new Map(), direct = [];
+        files.forEach(file => {
+          if (file.source_id !== source.id) return;
+          const directory = file.relative_path.slice(0, Math.max(0, file.relative_path.lastIndexOf('/')));
+          if (directory === path) { direct.push(file); return; }
+          if (!directory.startsWith(prefix)) return;
+          const name = directory.slice(prefix.length).split('/')[0];
+          const folder = folders.get(name) || { name, path: prefix + name, files: 0, size: 0 };
+          folder.files++; folder.size += file.size; folders.set(name, folder);
+        });
+        if (path && !folders.size && !direct.length) return json({ error: 'Folder not found' }, 404);
+        const listed = [...folders.values()].sort((a, b) => fold(a.name).localeCompare(fold(b.name)) || a.name.localeCompare(b.name));
+        direct.sort((a, b) => fold(a.name).localeCompare(fold(b.name)) || a.id - b.id);
+        const offset = number(params, 'offset', 0, 1000000), limit = number(params, 'limit', 60, 200) || 60;
+        const page = listed.slice(offset, offset + limit), fileOffset = Math.max(0, offset - listed.length);
+        return json({ source: { id: source.id, label: source.label, kind: source.kind }, path, folders: page, files: direct.slice(fileOffset, fileOffset + limit - page.length), total: listed.length + direct.length, total_folders: listed.length, total_files: direct.length, offset, limit, elapsed_ms: Math.max(0.1, performance.now() - started) });
+      }
       if (endpoint === 'file') {
         const file = files.find(file => file.id === Number(params.get('id')));
         if (!file) return json({ error: 'File not found' }, 404);

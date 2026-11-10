@@ -165,7 +165,7 @@ def main():
         report = {"seed": 20261029, "synthetic_files": 1640, "preparation_seconds": preparation_seconds,
                   "checks": len(checks), "passed": sum(c["pass"] for c in checks), "failures": failures,
                   "search_http_median_ms": sorted(timings)[len(timings)//2],
-                  "scope": "Windows local HTTP; synthetic inputs; independent substring/sort/filter oracle; content, Unicode, integrity and concurrent reads"}
+                  "scope": "local HTTP; synthetic inputs; independent substring/sort/filter oracle; content, Unicode, integrity and concurrent reads"}
     output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     print(output)
     if args.output:

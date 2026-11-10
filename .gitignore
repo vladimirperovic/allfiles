@@ -28,9 +28,7 @@ preview/
 .cache/
 .venv/
 __pycache__/
-coverage.out
 /target/
-*.test
 *.zip
 *.tar.gz
 

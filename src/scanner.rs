@@ -70,18 +70,13 @@ pub fn scan(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Scan root is not UTF-8"))?
         .into();
+    // A blank label means "the folder name" for a new medium and "unchanged"
+    // for an existing one; begin_scan resolves it together with the kind.
     if options.label.trim().is_empty() {
-        options.label = root
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned();
-    }
-    if options.kind.is_empty() {
-        options.kind = "computer".into();
+        options.label.clear();
     }
     let source = store.lock().unwrap().begin_scan(&options)?;
-    let workers = extraction_workers(&options.kind);
+    let workers = extraction_workers(&source.kind);
     let mut state = Progress {
         id: crypto::random_id(),
         status: "running".into(),

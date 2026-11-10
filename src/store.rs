@@ -31,14 +31,14 @@ pub const MAX_TEXT: usize = 8 << 20;
 // Version of fold() used for stored search_name/search_path values.
 const SEARCH_FOLD: &str = "2";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-// Decode only the requested character page plus one lookahead character.
-// The decompressed document never needs to be materialized for the details panel.
 fn check_operation(should_cancel: &dyn Fn() -> bool) -> Result<()> {
     if should_cancel() {
         bail!("Operation cancelled or timed out");
     }
     Ok(())
 }
+// Decode only the requested character page plus one lookahead character.
+// The decompressed document never needs to be materialized for the details panel.
 fn text_page(
     payload: &[u8],
     offset: usize,
@@ -160,12 +160,16 @@ pub struct FileResult {
 #[serde(default, deny_unknown_fields)]
 pub struct ScanOptions {
     pub root: String,
+    /// Empty: the medium's current label, or the folder name for a new one.
     pub label: String,
+    /// Empty: the medium's current kind, or `folder` for a new one.
     pub kind: String,
-    pub location: String,
+    /// Absent: the medium's current location. An empty text clears it.
+    pub location: Option<String>,
     pub source_id: String,
     pub index_content: bool,
 }
+pub const KINDS: [&str; 5] = ["folder", "computer", "external", "bluray", "lto"];
 #[derive(Clone)]
 pub struct ScannedFile {
     pub relative: String,
@@ -657,38 +661,64 @@ impl Store {
     }
     pub fn begin_scan(&mut self, o: &ScanOptions) -> Result<Source> {
         self.check()?;
-        let label = if o.label.is_empty() {
+        if !o.kind.is_empty() && !KINDS.contains(&o.kind.as_str()) {
+            bail!("Unknown media kind; use folder, computer, external, bluray or lto");
+        }
+        let folder_name = || {
             Path::new(&o.root)
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned()
-        } else {
-            o.label.clone()
         };
-        let id = if !o.source_id.is_empty() {
-            self.conn
-                .query_row("SELECT id FROM sources WHERE id=?", [&o.source_id], |r| {
-                    r.get::<_, String>(0)
-                })?
+        // (id, label, kind, location) of the medium this scan refreshes.
+        let known = |r: &Row<'_>| -> rusqlite::Result<(String, String, String, String)> {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        };
+        let existing = if !o.source_id.is_empty() {
+            Some(self.conn.query_row(
+                "SELECT id,label,kind,location FROM sources WHERE id=?",
+                [&o.source_id],
+                known,
+            )?)
         } else {
+            let label = if o.label.is_empty() {
+                folder_name()
+            } else {
+                o.label.clone()
+            };
             self.conn
                 .query_row(
-                    "SELECT id FROM sources WHERE root=? AND label=?",
+                    "SELECT id,label,kind,location FROM sources WHERE root=? AND label=?",
                     params![o.root, label],
-                    |r| r.get::<_, String>(0),
+                    known,
                 )
                 .optional()?
-                .unwrap_or_else(crypto::random_id)
         };
-        let kind = if o.kind.is_empty() { "folder" } else { &o.kind };
-        self.conn.execute("INSERT INTO sources(id,root,label,kind,location,status) VALUES(?,?,?,?,?,'scanning') ON CONFLICT(id) DO UPDATE SET root=excluded.root,label=excluded.label,kind=excluded.kind,location=excluded.location,status='scanning'",params![id,o.root,label,kind,o.location])?;
+        // Settings a rescan does not name stay as they are; before, a rescan
+        // without them reset the kind and erased the location.
+        let (id, old_label, old_kind, old_location) = match existing {
+            Some((id, label, kind, location)) => (id, Some(label), Some(kind), Some(location)),
+            None => (crypto::random_id(), None, None, None),
+        };
+        let label = if !o.label.is_empty() {
+            o.label.clone()
+        } else {
+            old_label.unwrap_or_else(folder_name)
+        };
+        let kind = if !o.kind.is_empty() {
+            o.kind.clone()
+        } else {
+            old_kind.unwrap_or_else(|| "folder".into())
+        };
+        let location = o.location.clone().or(old_location).unwrap_or_default();
+        self.conn.execute("INSERT INTO sources(id,root,label,kind,location,status) VALUES(?,?,?,?,?,'scanning') ON CONFLICT(id) DO UPDATE SET root=excluded.root,label=excluded.label,kind=excluded.kind,location=excluded.location,status='scanning'",params![id,o.root,label,kind,location])?;
         Ok(Source {
             id,
             root: o.root.clone(),
             label,
-            kind: kind.into(),
-            location: o.location.clone(),
+            kind,
+            location,
             status: "scanning".into(),
             ..Default::default()
         })
@@ -724,7 +754,7 @@ impl Store {
             let mut find_file =
                 tx.prepare("SELECT id,version,text_status FROM files WHERE dir_id=? AND name=?")?;
             let mut update_file = tx.prepare("UPDATE files SET size=?,modified=?,modified_ns=?,version=?,seen_scan=?,text_status=CASE WHEN version!=? THEN 'not_indexed' ELSE text_status END,text_detail=CASE WHEN version!=? THEN '' ELSE text_detail END WHERE id=?")?;
-            let mut add_file = tx.prepare("INSERT INTO files(source_id,dir_id,name,search_name,extension,size,modified,modified_ns,version,seen_scan) VALUES(?,?,?,?,?,?,?,?,?,?)")?;
+            let mut add_file = tx.prepare("INSERT INTO files(source_id,dir_id,name,search_name,extension,size,modified,modified_ns,version,seen_scan,text_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)")?;
             let mut unsupported =
                 tx.prepare("UPDATE files SET text_status='unsupported',text_detail='' WHERE id=?")?;
             let mut details = crate::details::Writer::new(&tx, has_content)?;
@@ -766,6 +796,7 @@ impl Store {
                         })
                         .optional()?;
                     let fresh = old.is_none();
+                    let candidate = crate::extract::candidate(&f.extension);
                     let (id, previous, status) = if let Some((id, previous, status)) = old {
                         update_file.execute(params![
                             f.size,
@@ -789,7 +820,14 @@ impl Store {
                             f.modified,
                             f.modified_ns,
                             version,
-                            scan
+                            scan,
+                            // Most files have no extractable text; a second
+                            // UPDATE per new row would only repeat this.
+                            if candidate {
+                                "not_indexed"
+                            } else {
+                                "unsupported"
+                            }
                         ])?;
                         (
                             tx.last_insert_rowid(),
@@ -797,11 +835,12 @@ impl Store {
                             "not_indexed".to_owned(),
                         )
                     };
+                    // No extras at all: this source has no such details and
+                    // stored ones stay. Empty extras: it has none for this file.
                     if let Some(extra) = &f.extra {
-                        details.save(id, &version, extra)?;
+                        details.save(id, &version, extra, fresh)?;
                     }
-                    let candidate = crate::extract::candidate(&f.extension);
-                    if !candidate && (fresh || previous != version) {
+                    if !candidate && !fresh && previous != version {
                         unsupported.execute([id])?;
                     }
                     let expects = matches!(status.as_str(), "indexed" | "truncated");
@@ -1292,9 +1331,8 @@ impl Store {
         let start = Instant::now();
         check_operation(should_cancel)?;
         self.check()?;
-        let path = path.replace('\\', "/");
-        let path = path.trim_matches('/');
-        if path.contains('\0') || path.len() > 32768 {
+        let requested = path.replace('\\', "/");
+        if requested.contains('\0') || requested.len() > 32768 {
             bail!("Invalid folder path");
         }
         let (label, kind): (String, String) =
@@ -1308,63 +1346,33 @@ impl Store {
             limit
         };
         let offset = offset.max(0);
-        let prefix = if path.is_empty() {
-            String::new()
-        } else {
-            format!("{path}/")
+        // An import can store absolute folders ("/home/a", "//server/share").
+        // Their leading slashes belong to the first folder name, which is
+        // listed at the root of the medium; "/" alone holds the files stored
+        // directly there.
+        let mut path = match requested.trim_end_matches('/') {
+            "" if !requested.is_empty() => "/",
+            trimmed => trimmed,
         };
-        let mut folders: HashMap<String, (i64, i64)> = HashMap::new();
-        {
-            let mut statement = self.conn.prepare(
-                "SELECT d.path,count(f.id),coalesce(sum(f.size),0) FROM directories d JOIN files f ON f.dir_id=d.id WHERE d.source_id=? AND d.path GLOB ? GROUP BY d.id",
-            )?;
-            let mut rows =
-                statement.query(params![source, format!("{}*", glob_literal(&prefix))])?;
-            let mut seen = 0u32;
-            while let Some(row) = rows.next()? {
-                seen += 1;
-                if seen.is_multiple_of(256) {
-                    check_operation(should_cancel)?;
-                }
-                let full: String = row.get(0)?;
-                let Some(rest) = full.strip_prefix(prefix.as_str()) else {
-                    continue;
-                };
-                let Some(name) = rest.split('/').next().filter(|n| !n.is_empty()) else {
-                    continue;
-                };
-                let entry = folders.entry(name.to_owned()).or_default();
-                entry.0 += row.get::<_, i64>(1)?;
-                entry.1 += row.get::<_, i64>(2)?;
-            }
+        let mut level = self.folder_level(source, path, should_cancel)?;
+        if level.is_empty() && path.starts_with('/') {
+            // A stray leading separator before an ordinary relative folder.
+            path = path.trim_start_matches('/');
+            level = self.folder_level(source, path, should_cancel)?;
         }
-        let mut folders: Vec<_> = folders.into_iter().collect();
-        folders.sort_by(|a, b| (fold(&a.0), &a.0).cmp(&(fold(&b.0), &b.0)));
-        let total_folders = folders.len() as i64;
-        let directory: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT id FROM directories WHERE source_id=? AND path=?",
-                params![source, path],
-                |r| r.get(0),
-            )
-            .optional()?;
-        let total_files: i64 = match directory {
-            Some(id) => {
-                self.conn
-                    .query_row("SELECT count(*) FROM files WHERE dir_id=?", [id], |r| {
-                        r.get(0)
-                    })?
-            }
-            None => 0,
-        };
-        if path.is_empty() && total_folders == 0 && total_files == 0 {
-            // An empty medium is fine; an unknown sub-folder is not.
-        } else if !path.is_empty() && total_folders == 0 && total_files == 0 {
+        // An empty medium is fine; an unknown sub-folder is not.
+        if level.is_empty() && !path.is_empty() {
             return Err(
                 std::io::Error::new(std::io::ErrorKind::NotFound, "Folder not found").into(),
             );
         }
+        let FolderLevel {
+            prefix,
+            folders,
+            directory,
+            total_files,
+        } = level;
+        let total_folders = folders.len() as i64;
         let page_folders: Vec<Value> = folders
             .iter()
             .skip(offset as usize)
@@ -1410,6 +1418,76 @@ impl Store {
             "limit":limit,
             "elapsed_ms":start.elapsed().as_secs_f64()*1000.0,
         }))
+    }
+    // Subfolders (with the files and bytes below each) and the directory row
+    // of one folder. `path` is "" for the root, "/" for the absolute root of
+    // an imported medium, or a stored folder path without a trailing slash.
+    fn folder_level(
+        &self,
+        source: &str,
+        path: &str,
+        should_cancel: &dyn Fn() -> bool,
+    ) -> Result<FolderLevel> {
+        let prefix = if path.is_empty() {
+            String::new()
+        } else {
+            format!("{path}/")
+        };
+        let mut folders: HashMap<String, (i64, i64)> = HashMap::new();
+        // "/" has no subfolders of its own: "/home" is listed at the root, and
+        // the prefix "//" would claim network paths such as "//server/share".
+        if path != "/" {
+            let mut statement = self.conn.prepare(
+                "SELECT d.path,count(f.id),coalesce(sum(f.size),0) FROM directories d JOIN files f ON f.dir_id=d.id WHERE d.source_id=? AND d.path GLOB ? GROUP BY d.id",
+            )?;
+            let mut rows =
+                statement.query(params![source, format!("{}*", glob_literal(&prefix))])?;
+            let mut seen = 0u32;
+            while let Some(row) = rows.next()? {
+                seen += 1;
+                if seen.is_multiple_of(256) {
+                    check_operation(should_cancel)?;
+                }
+                let full: String = row.get(0)?;
+                let Some(rest) = full.strip_prefix(prefix.as_str()) else {
+                    continue;
+                };
+                // Leading slashes stay with the name: "/home", "//server", "/".
+                let lead = rest.len() - rest.trim_start_matches('/').len();
+                let end = rest[lead..].find('/').map_or(rest.len(), |i| lead + i);
+                if end == 0 {
+                    continue;
+                }
+                let entry = folders.entry(rest[..end].to_owned()).or_default();
+                entry.0 += row.get::<_, i64>(1)?;
+                entry.1 += row.get::<_, i64>(2)?;
+            }
+        }
+        let mut folders: Vec<_> = folders.into_iter().collect();
+        folders.sort_by(|a, b| (fold(&a.0), &a.0).cmp(&(fold(&b.0), &b.0)));
+        let directory: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM directories WHERE source_id=? AND path=?",
+                params![source, path],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let total_files: i64 = match directory {
+            Some(id) => {
+                self.conn
+                    .query_row("SELECT count(*) FROM files WHERE dir_id=?", [id], |r| {
+                        r.get(0)
+                    })?
+            }
+            None => 0,
+        };
+        Ok(FolderLevel {
+            prefix,
+            folders,
+            directory,
+            total_files,
+        })
     }
     pub fn metadata(&self, id: i64) -> Result<FileResult> {
         self.check()?;
@@ -1483,6 +1561,17 @@ impl Store {
         File::open(&destination)?.sync_all()?;
         cleanup.complete = true;
         Ok(destination)
+    }
+}
+struct FolderLevel {
+    prefix: String,
+    folders: Vec<(String, (i64, i64))>,
+    directory: Option<i64>,
+    total_files: i64,
+}
+impl FolderLevel {
+    fn is_empty(&self) -> bool {
+        self.folders.is_empty() && self.total_files == 0
     }
 }
 struct ExportCleanup {

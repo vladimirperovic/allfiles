@@ -69,6 +69,8 @@ impl Audio {
             && self.title.is_empty()
             && self.duration.is_none()
             && self.bitrate.is_none()
+            && self.channels.is_none()
+            && self.sample_rate.is_none()
     }
 }
 
@@ -145,6 +147,7 @@ pub struct Writer<'a> {
     drop_exif: rusqlite::Statement<'a>,
     drop_audio: rusqlite::Statement<'a>,
     thumbnail: Option<rusqlite::Statement<'a>>,
+    same_thumbnail: Option<rusqlite::Statement<'a>>,
     drop_thumbnail: Option<rusqlite::Statement<'a>>,
 }
 impl<'a> Writer<'a> {
@@ -164,6 +167,11 @@ impl<'a> Writer<'a> {
             } else {
                 None
             },
+            same_thumbnail: if thumbnails {
+                Some(tx.prepare("SELECT count(*) FROM content.thumbnails WHERE file_id=? AND version=? AND mime=? AND data=?")?)
+            } else {
+                None
+            },
             drop_thumbnail: if thumbnails {
                 Some(tx.prepare("DELETE FROM content.thumbnails WHERE file_id=?")?)
             } else {
@@ -172,11 +180,18 @@ impl<'a> Writer<'a> {
         })
     }
 
-    /// Replace everything stored for `id` with `extra`. `version` identifies
-    /// the file revision a thumbnail belongs to.
-    pub fn save(&mut self, id: i64, version: &str, extra: &FileExtra) -> Result<()> {
+    /// Replace everything stored for `id` with `extra`, so details the source
+    /// no longer has disappear too. `version` identifies the file revision a
+    /// thumbnail belongs to. A `fresh` file was inserted in this transaction
+    /// and has nothing to replace.
+    pub fn save(&mut self, id: i64, version: &str, extra: &FileExtra, fresh: bool) -> Result<()> {
+        if fresh && extra.is_empty() {
+            return Ok(());
+        }
         if extra.crc32.is_empty() && extra.rating.is_none() && extra.comment.is_empty() {
-            self.drop_info.execute([id])?;
+            if !fresh {
+                self.drop_info.execute([id])?;
+            }
         } else {
             self.info.execute(params![
                 id,
@@ -186,7 +201,9 @@ impl<'a> Writer<'a> {
             ])?;
         }
         if extra.exif.is_empty() {
-            self.drop_exif.execute([id])?;
+            if !fresh {
+                self.drop_exif.execute([id])?;
+            }
         } else {
             let e = &extra.exif;
             self.exif.execute(params![
@@ -205,7 +222,9 @@ impl<'a> Writer<'a> {
             ])?;
         }
         if extra.audio.is_empty() {
-            self.drop_audio.execute([id])?;
+            if !fresh {
+                self.drop_audio.execute([id])?;
+            }
         } else {
             let a = &extra.audio;
             self.audio.execute(params![
@@ -222,7 +241,9 @@ impl<'a> Writer<'a> {
                 a.sample_rate
             ])?;
         }
-        self.clear_tags.execute([id])?;
+        if !fresh {
+            self.clear_tags.execute([id])?;
+        }
         for tag in extra.tags.iter().take(MAX_TAGS) {
             let tag = limited(tag);
             if !tag.is_empty() {
@@ -230,11 +251,28 @@ impl<'a> Writer<'a> {
                 self.link_tag.execute(params![id, tag])?;
             }
         }
-        if let (Some(add), Some(drop)) = (&mut self.thumbnail, &mut self.drop_thumbnail) {
+        if let (Some(add), Some(same), Some(drop)) = (
+            &mut self.thumbnail,
+            &mut self.same_thumbnail,
+            &mut self.drop_thumbnail,
+        ) {
             match &extra.thumbnail {
-                Some(t) => add.execute(params![id, version, t.mime, t.data])?,
-                None => drop.execute([id])?,
-            };
+                // Importing the same catalog again must not rewrite every
+                // stored image: comparing reads it, replacing journals it,
+                // writes it and syncs it.
+                Some(t)
+                    if !fresh
+                        && same.query_row(params![id, version, t.mime, t.data], |r| {
+                            r.get::<_, i64>(0)
+                        })? > 0 => {}
+                Some(t) => {
+                    add.execute(params![id, version, t.mime, t.data])?;
+                }
+                None if fresh => {}
+                None => {
+                    drop.execute([id])?;
+                }
+            }
         }
         Ok(())
     }

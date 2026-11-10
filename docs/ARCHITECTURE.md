@@ -37,7 +37,7 @@ Name/path lookup uses normalized fields and trigram indexes, with an ordered sca
 
 Transactional counters avoid resumming all files on every status poll. Connection-local availability tables/triggers describe which persisted content links are currently usable. When a content database is missing, mismatched or incomplete, metadata remains searchable and the response reports available content separately from stored extraction metadata. Opening an incomplete copy does not erase persisted extraction status.
 
-One process owns a catalog directory. SQLite uses rollback journals, `synchronous=FULL`, foreign keys and in-memory temporary tables. Export uses SQLite backup into a new directory, optionally with new encryption keys; it never overwrites an existing destination. Use export for a running catalog and close the process before manual copies or dismounts.
+One process owns a catalog directory. SQLite uses rollback journals, `synchronous=FULL`, foreign keys and in-memory temporary tables. Export uses `VACUUM INTO` a new directory, optionally with new encryption keys; it never overwrites an existing destination. Use export for a running catalog and close the process before manual copies or dismounts.
 
 ## Work, requests and cancellation
 

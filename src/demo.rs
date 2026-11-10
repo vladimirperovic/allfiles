@@ -40,7 +40,7 @@ pub fn seed(s: &mut Store) -> Result<()> {
             root: format!("demo://{si}"),
             label: (*label).into(),
             kind: (*kind).into(),
-            location: (*location).into(),
+            location: Some((*location).into()),
             ..Default::default()
         })?;
         let mut entries = Vec::new();

@@ -81,7 +81,7 @@ Choose **Add media** in the interface, set a label and physical location, and se
   --content
 ```
 
-Replace the sample path with a real one. Without `--content`, the CLI scan collects metadata only. With it, AllFiles also extracts text from supported documents. A completed rescan removes stale catalog entries for missing files; it never deletes original files. A cancelled or failed scan retains records already processed and does not perform that final stale-entry cleanup.
+Replace the sample path with a real one. `--kind` must be one of the five kinds above; a new medium without it is a `folder`. Scanning the same root and label again refreshes that medium, and a kind or location you leave out stays as it was. Without `--content`, the CLI scan collects metadata only. With it, AllFiles also extracts text from supported documents. A completed rescan removes stale catalog entries for missing files; it never deletes original files. A cancelled or failed scan retains records already processed and does not perform that final stale-entry cleanup.
 
 The folder picker lists up to 2,000 subfolders and shows a notice if more exist. Ordinary files do not consume this limit. Enter the full folder path directly when the desired folder is not listed.
 
@@ -108,7 +108,7 @@ The interface uses a dark Graphite theme, translucent panels, readable table row
 
 ## Import an existing WinCatalog catalog
 
-Point AllFiles directly at the native WinCatalog database (`.w3cat`). It is opened read-only and is never modified; no journal or lock file is written next to it, so it may stay on a read-only or removable disk. Every scanned medium in the catalog becomes one AllFiles medium: optical discs are imported as `bluray`, everything else as `external`, unless you pass `--kind`. Files stored *inside* archives (the contents WinCatalog lists under a ZIP) are skipped, because AllFiles does not look inside archives when scanning either.
+Point AllFiles directly at the native WinCatalog database (`.w3cat`). It is opened read-only and is never modified; no journal or lock file is written next to it, so it may stay on a read-only or removable disk. Every scanned medium in the catalog becomes one AllFiles medium: optical discs are imported as `bluray`, everything else as `external`, unless you pass `--kind`; the interface leaves that choice to the importer. Files stored *inside* archives (the contents WinCatalog lists under a ZIP) are skipped, because AllFiles does not look inside archives when scanning either.
 
 ```sh
 ./allfiles-linux-amd64 import \
@@ -116,7 +116,7 @@ Point AllFiles directly at the native WinCatalog database (`.w3cat`). It is open
   --file "/path/to/My WinCatalog File.w3cat"
 ```
 
-The reader also brings over, per file, WinCatalog's **thumbnail**, **EXIF** (camera, lens, size, date taken, ISO, exposure, aperture, focal length, flash, GPS), **audio tags** (title, artist, album, year, track, genre, duration, bitrate), **tags**, **rating** (shown as 1–5 stars), **comment** and **CRC32** where present. They show in the file view, and a tag can be clicked to list the files that carry it. WinCatalog records CRC32 only for entries inside archives (which are skipped) and its md5 column is empty in the catalog this was tested on, so neither is usually present; md5 is not imported. Thumbnails are stored in `content.sqlite` (about 2.4 GB for 220,000 thumbnails), everything else in `catalog.sqlite` (+48 MB). A catalog with about 433,000 items (348,000 files, 10 media, 220,000 thumbnails) imported in about 30 seconds. Re-running the same import updates the same media instead of duplicating them. The `.w3cat` file may be larger than 2 GiB (up to 64 GiB). A WinCatalog password only protects WinCatalog's own interface; the data is not encrypted, and AllFiles does not ask for or check that password.
+The reader also brings over, per file, WinCatalog's **thumbnail**, **EXIF** (camera, lens, size, date taken, ISO, exposure, aperture, focal length, flash, GPS), **audio tags** (title, artist, album, year, track, genre, duration, bitrate), **tags**, **rating** (shown as 1–5 stars), **comment** and **CRC32** where present. They show in the file view, and a tag can be clicked to list the files that carry it. WinCatalog records CRC32 only for entries inside archives (which are skipped) and its md5 column is empty in the catalog this was tested on, so neither is usually present; md5 is not imported. Thumbnails are stored in `content.sqlite` (about 2.4 GB for 220,000 thumbnails), everything else in `catalog.sqlite` (+48 MB). A catalog with about 433,000 items (348,000 files, 10 media, 220,000 thumbnails) imported in about 30 seconds. Re-running the same import updates the same media instead of duplicating them: details removed in WinCatalog are removed here, and thumbnails that did not change are not written again. The `.w3cat` file may be larger than 2 GiB (up to 64 GiB). A WinCatalog password only protects WinCatalog's own interface; the data is not encrypted, and AllFiles does not ask for or check that password.
 
 Alternatively, start with a CSV report containing filenames, paths, sizes and, if applicable, media labels. Common CSV/TSV layouts, EFU file lists and recognized XML reports are supported:
 
@@ -134,7 +134,7 @@ In hierarchical XML, folder names/paths and media metadata may be attributes or 
 
 ## Browse like a file manager
 
-Choose a medium in the media filter and leave the search box empty: the list shows that medium's folders first (with file count and size), then the files in it. Double-click a folder, or press Enter, to open it; use the `..` row, Backspace or the path above the table to go back. Entering a search, a type or tag filter, or another sort order switches to the flat result list.
+Choose a medium in the media filter and leave the search box empty: the list shows that medium's folders first (with file count and size), then the files in it. Double-click a folder, or press Enter, to open it; use the `..` row, Backspace or the path above the table to go back. Folders imported with absolute paths appear at the top level under their full first name, such as `/home` or `//server`. Entering a search, a type or tag filter, or another sort order switches to the flat result list.
 
 ## Export, back up and move a catalog
 
@@ -201,7 +201,7 @@ Replace `command` with the actual absolute executable path and select the binary
 | `allfiles_cancel` | Cancel the current scan/import job |
 | `allfiles_file` | Metadata and text by file `id`; `offset` and `max_chars`, default 4,000 and maximum 20,000 characters |
 
-For example: “Find files with kitchen in the name,” “Search document text for walnut cabinetry,” or “I added files to HOME-SSD-01; rescan that media and check its progress.” Scans require the source folder on the machine running AllFiles and return a job immediately. Use `index_content: false` for metadata-only scans. `allfiles_file` with `max_chars: 0` returns metadata without reading document text and omits `total_chars`.
+For example: “Find files with kitchen in the name,” “Search document text for walnut cabinetry,” or “I added files to HOME-SSD-01; rescan that media and check its progress.” Scans require the source folder on the machine running AllFiles and return a job immediately. Use `index_content: false` for metadata-only scans. `allfiles_file` with `max_chars: 0` returns metadata without reading document text and omits `total_chars`. Imported details such as tags, EXIF and audio tags are included; a thumbnail is reported only as `has_thumbnail`, never as image data.
 
 **A local catalog does not make a cloud AI conversation local.** Requested names, paths, snippets and document text become visible to your AI client and its configured model provider. Use a fully local client/model setup if that is required. Treat returned document contents as data, not instructions.
 
@@ -239,7 +239,7 @@ Do not use the demo directory for your real catalog. `demo` seeds it and exits; 
 
 ## Public release 0.1.6 and upgrading
 
-The production build is **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. Existing Go source files are retained as a reference implementation and for compatibility checks; production builds use Cargo. See the [architecture](docs/ARCHITECTURE.md) for a module overview.
+The production build is **Rust with native SQLite 3.54.1 + FTS5**. Scanning, PDF/Office extraction, CSV/XML/EFU import, local HTTP, all six MCP tools, exports and Adiantum encryption are implemented in Rust. The earlier Go implementation was removed from the repository after 0.1.6 and remains in earlier tags such as v0.1.6 and v0.2.0; catalogs it wrote, including encrypted ones, still open. See the [architecture](docs/ARCHITECTURE.md) for a module overview.
 
 **0.1.6 identifies this public release of the current Rust application.** Historical 0.2.0/0.3.0 tags and releases are unchanged; this smaller number does not mean a return to older Go code. The [changelog](CHANGELOG.md) describes this release.
 
@@ -271,11 +271,11 @@ Historical version 0.2.0 introduced transactional catalog counters, index-driven
 
 Remaining work includes cursor pagination for very deep pages, reads that do not wait for an indexing transaction (one lock currently serializes requests), export progress/cancellation, and separate-process PDF extraction with strict resource limits. The PDF library can build an entire page's text before our output limit is checked; the existing input/output limits do not constitute a parser sandbox.
 
-The separate [Go](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/go-search/README.md) and [Rust](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow verifies every count and ordered ID page and records runtime versions, timings, peak process memory and benchmark executable sizes.
+The separate [Go](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/go-search/README.md) and [Rust](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/rust-search/README.md) experiments compare identical SQL workloads against unencrypted synthetic data. They are not replacement applications and are excluded from the production executable. The **Compare Go and Rust search** workflow, kept with them in the v0.1.6 tag, verified every count and ordered ID page and recorded runtime versions, timings, peak process memory and benchmark executable sizes.
 
 The [measured comparison and recommendations](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/README.md) include all three variants and both raw rounds. Native SQLite accounted for most of the broad-query improvement in this experiment; the historical 0.3.0 production port included native integration and compatible encryption. These SQL measurements exclude complete application behavior and encryption.
 
-The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/results/2026-10-26-rust-app-windows.json), reproduced by `scripts/compare-http.py`.
+The full Windows application was also measured after migration: 100,050 synthetic files, two reversed-order rounds, three warmups and 15 measured requests per case over persistent local HTTP. Mean of round medians: broad filename search **319.59 → 129.77 ms**, deep broad page **384.65 → 167.32 ms**, rare content in one shared 1 MiB document **6.93 → 4.96 ms**. Executable size **14.24 → 6.18 MiB**. This includes the native SQLite engine/version change, not just the language; it excludes browser, cold storage, encryption, indexing and memory measurement. [Raw samples and methodology](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/results/2026-10-26-rust-app-windows.json), reproduced by [`scripts/compare-http.py`](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/scripts/compare-http.py) in the v0.1.6 tag.
 
 ### Historical Rust 0.3.0 optimization measurements (26 October 2026)
 
@@ -308,7 +308,7 @@ Writes are measured as whole CLI process time on the same machine: two reversed-
 - **Database cache.** SQLite keeps up to 64 MiB of pages per database instead of about 2 MiB, so repeated searches read the file less often and, for encrypted catalogs, decrypt less often. Memory is used only for pages actually read.
 - **Snippets.** Snippets match terms regardless of case and diacritics, like the search itself: the query “kuca” now shows the text around “Kuća” instead of the start of the document. A document is decompressed only until the snippet is complete. With several terms the snippet starts at whichever term occurs first.
 
-A rare filename is about 0.03 ms slower because of the probe. Measurements use a warm cache and an unencrypted catalog; they exclude cold storage, encryption, large varied documents, PDF/Office extraction and memory. Write times depend most on the disk, so a container or USB drive can show a different ratio. [Raw samples](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/results/2026-10-26-rust-optimizations-windows.json) are reproduced by `scripts/compare-http.py` and `scripts/compare-writes.py`.
+A rare filename is about 0.03 ms slower because of the probe. Measurements use a warm cache and an unencrypted catalog; they exclude cold storage, encryption, large varied documents, PDF/Office extraction and memory. Write times depend most on the disk, so a container or USB drive can show a different ratio. [Raw samples](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/experiments/results/2026-10-26-rust-optimizations-windows.json) are reproduced by [`scripts/compare-http.py`](https://github.com/vladimirperovic/allfiles/blob/v0.1.6/scripts/compare-http.py) in the v0.1.6 tag and by `scripts/compare-writes.py`.
 
 ## License and reporting issues
 

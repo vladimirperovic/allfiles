@@ -390,6 +390,17 @@ pub fn validate(tool: &Value, args: &Value) -> Result<()> {
     }
     Ok(())
 }
+// The interface shows a file's thumbnail from a base64 data URI of up to
+// 512 KiB. A model cannot use it, and it would be sent twice (as text and as
+// structured content), so the tool reports only that one exists.
+fn without_thumbnail(mut file: Value) -> Value {
+    if let Some(details) = file.get_mut("details").and_then(Value::as_object_mut)
+        && details.remove("thumbnail").is_some()
+    {
+        details.insert("has_thumbnail".into(), true.into());
+    }
+    file
+}
 struct Bridge {
     base: String,
     client: reqwest::Client,
@@ -492,7 +503,7 @@ impl Bridge {
                 if v["offset"] != offset || count > limit || v["returned_chars"] != count {
                     bail!("Invalid text page; restart AllFiles with the current version");
                 }
-                Ok(v)
+                Ok(without_thumbnail(v))
             }
             "allfiles_scan" => {
                 if a.get("source_id").is_some() {
@@ -568,6 +579,21 @@ mod tests {
             assert!(validate_url(raw).is_err(), "accepted {raw}");
         }
         Ok(())
+    }
+
+    #[test]
+    fn file_tool_omits_the_thumbnail_and_keeps_other_details() {
+        let page = json!({"file": {"id": 1}, "text": "t", "details": {
+            "tags": ["a"], "thumbnail": format!("data:image/jpeg;base64,{}", "A".repeat(4096))
+        }});
+        let sent = without_thumbnail(page);
+        assert_eq!(
+            sent["details"],
+            json!({"tags": ["a"], "has_thumbnail": true})
+        );
+        assert_eq!(sent["text"], "t");
+        let plain = json!({"file": {"id": 1}, "details": {}});
+        assert_eq!(without_thumbnail(plain.clone()), plain);
     }
 
     #[test]

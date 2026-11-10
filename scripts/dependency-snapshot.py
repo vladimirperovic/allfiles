@@ -1,10 +1,10 @@
 """Create a GitHub dependency snapshot from committed Cargo lockfiles.
 
 No network requests or credentials are used. Every tracked Cargo.toml must have
-its own Cargo.lock, as in this repository's application and isolated experiment.
-The complete lock graph is submitted for both files because GitHub deduplicates
-inventories by manifest path. Optional and other-target dependencies remain in
-the inventory; runtime/development scope cannot be inferred from a lockfile.
+its own Cargo.lock. The complete lock graph is submitted for both files of a
+pair because GitHub deduplicates inventories by manifest path. Optional and
+other-target dependencies remain in the inventory; runtime/development scope
+cannot be inferred from a lockfile.
 
 Schema: https://docs.github.com/en/rest/dependency-graph/dependency-submission
 """

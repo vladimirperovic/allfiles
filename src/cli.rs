@@ -163,7 +163,7 @@ pub fn run() -> Result<()> {
                         root: get("root"),
                         label: get("label"),
                         kind: get("kind"),
-                        location: get("location"),
+                        location: options.get("location").cloned(),
                         index_content: flag("content"),
                         ..Default::default()
                     },

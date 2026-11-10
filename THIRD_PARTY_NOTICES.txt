@@ -1194,42 +1194,6 @@ Source: LICENSE-MIT
 
 
 ==============================================================================
-futures-io 0.3.34 — MIT OR Apache-2.0
-https://github.com/rust-lang/futures-rs
-Source: LICENSE-APACHE
-==============================================================================
-
-[Shared notice text 132 — reproduced below]
-
-
-==============================================================================
-futures-io 0.3.34 — MIT OR Apache-2.0
-https://github.com/rust-lang/futures-rs
-Source: LICENSE-MIT
-==============================================================================
-
-[Shared notice text 133 — reproduced below]
-
-
-==============================================================================
-futures-sink 0.3.34 — MIT OR Apache-2.0
-https://github.com/rust-lang/futures-rs
-Source: LICENSE-APACHE
-==============================================================================
-
-[Shared notice text 132 — reproduced below]
-
-
-==============================================================================
-futures-sink 0.3.34 — MIT OR Apache-2.0
-https://github.com/rust-lang/futures-rs
-Source: LICENSE-MIT
-==============================================================================
-
-[Shared notice text 133 — reproduced below]
-
-
-==============================================================================
 futures-task 0.3.34 — MIT OR Apache-2.0
 https://github.com/rust-lang/futures-rs
 Source: LICENSE-APACHE
@@ -3777,24 +3741,6 @@ Source: LICENSE-MIT
 ==============================================================================
 
 [Shared notice text 207 — reproduced below]
-
-
-==============================================================================
-zeroize_derive 1.5.0 — Apache-2.0 OR MIT
-https://github.com/RustCrypto/utils
-Source: LICENSE-APACHE
-==============================================================================
-
-[Shared notice text 108 — reproduced below]
-
-
-==============================================================================
-zeroize_derive 1.5.0 — Apache-2.0 OR MIT
-https://github.com/RustCrypto/utils
-Source: LICENSE-MIT
-==============================================================================
-
-[Shared notice text 104 — reproduced below]
 
 
 ==============================================================================

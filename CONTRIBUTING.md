@@ -1,6 +1,6 @@
 # Contributing
 
-AllFiles is a local desktop application. Changes should preserve offline catalog access, bounded processing, the two-database format and the privacy boundaries described in [SECURITY.md](SECURITY.md). The production implementation is in Rust under `src/`; root-level Go files are retained for reference and compatibility checks.
+AllFiles is a local desktop application. Changes should preserve offline catalog access, bounded processing, the two-database format and the privacy boundaries described in [SECURITY.md](SECURITY.md). The implementation is in Rust under `src/`; the earlier Go implementation remains only in tags up to v0.1.6.
 
 ## Report a reproducible issue
 

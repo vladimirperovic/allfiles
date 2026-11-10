@@ -136,7 +136,7 @@ pub fn import(
                     root: media_root,
                     label,
                     kind,
-                    location,
+                    location: Some(location),
                     ..Default::default()
                 })?;
                 groups.insert(
