@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- My media list view: the last column fits both buttons (the second one was cut off and a horizontal scroll bar appeared), and the list no longer scrolls sideways.
 - Sidebar media list: each medium shows the year and month it was scanned (`2026-11`; the tooltip has the full date), and a selector above the list orders media by name, newest scan first or oldest scan first (remembered in this browser). The order also applies to the media cards and the filter.
 - **Export for USB** moved from the bottom of the sidebar to the top bar next to the animation button, in its own teal colour.
 - Browser reader: Chrome and Edge remember the chosen folder, so only the password is needed next time (the folder reference is kept in the browser, never the password); if the folder is missing the reader asks for it, and choosing the whole disc works too. New **Lock** button wipes the decrypted catalog from memory. The export date (`created` in `key.json`; older exports use the file date) is shown in the sidebar.
