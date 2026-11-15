@@ -31,7 +31,9 @@ async function open({ password, list }, say) {
   } catch { throw new Error("Pogrešna lozinka"); }
   say("Pokrećem SQLite…");
   sqlite3 = await sqlite3InitModule({ wasmBinary: b64(WASM), print() {}, printErr() {} });
-  const file = files.get("catalog.db"), size = file.size - chunks(file) * OV, ptr = sqlite3.wasm.alloc(size);
+  const file = files.get("catalog.db"), size = file.size - chunks(file) * OV;
+  let ptr;
+  try { ptr = sqlite3.wasm.alloc(size); } catch { throw new Error(`Nema dovoljno memorije u pregledaču za katalog od ${Math.round(size / 1e6)} MB. Zatvori druge kartice ili otvori na računaru sa više memorije.`); }
   await decryptInto("catalog.db", (o, p) => sqlite3.wasm.heap8u().set(p, ptr + o), (f) => say(`Dešifrujem katalog… ${Math.round(f * 100)}%`));
   db = new sqlite3.oo1.DB(":memory:", "c");
   const rc = sqlite3.capi.sqlite3_deserialize(db.pointer, "main", ptr, size, size, 1 | 4);  // FREEONCLOSE | READONLY

@@ -1034,7 +1034,7 @@
   $('#source-form').addEventListener('submit', event => submitForm(event, '#source-form-error', startScan));
   $('#import-form').addEventListener('submit', event => submitForm(event, '#import-form-error', startImport));
   $('#export-form').addEventListener('submit', event => submitForm(event, '#export-form-error', exportCatalog));
-  $('#export-browser').addEventListener('change', updateExportEncryption);
+  $('#export-browser').addEventListener('change', () => { if (!$('#export-browser').checked) $('#export-content').checked = true; updateExportEncryption(); });
   $('#export-encrypt').addEventListener('change', () => { if (!$('#export-encrypt').checked) clearExportSecrets(); updateExportEncryption(); });
   $('#export-dialog').addEventListener('close', clearExportSecrets);
   $('#export-dialog').addEventListener('cancel', clearExportSecrets);

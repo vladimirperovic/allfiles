@@ -171,9 +171,15 @@ pub struct ScanOptions {
 }
 /// Drop tags, thumbnails and extracted text that no catalogued file refers to any more.
 fn prune_orphans(tx: &rusqlite::Transaction, attached: bool) -> Result<()> {
-    tx.execute("DELETE FROM tags WHERE id NOT IN(SELECT tag_id FROM file_tags)", [])?;
+    tx.execute(
+        "DELETE FROM tags WHERE id NOT IN(SELECT tag_id FROM file_tags)",
+        [],
+    )?;
     if attached {
-        tx.execute("DELETE FROM content.thumbnails WHERE file_id NOT IN(SELECT id FROM files)", [])?;
+        tx.execute(
+            "DELETE FROM content.thumbnails WHERE file_id NOT IN(SELECT id FROM files)",
+            [],
+        )?;
         tx.execute_batch("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE text_status NOT IN ('indexed','truncated'));DELETE FROM content.fts WHERE rowid IN(SELECT id FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links));DELETE FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links);")?;
     }
     Ok(())
@@ -993,7 +999,11 @@ impl Store {
         self.ensure_content(false)?;
         let attached = self.attached.get();
         let tx = self.conn.transaction()?;
-        let known: i64 = tx.query_row("SELECT COUNT(*) FROM sources WHERE id=?", params![source], |r| r.get(0))?;
+        let known: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM sources WHERE id=?",
+            params![source],
+            |r| r.get(0),
+        )?;
         if known == 0 {
             bail!("Nema tog medija");
         }

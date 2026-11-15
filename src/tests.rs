@@ -1859,30 +1859,65 @@ fn removing_a_medium_clears_files_names_text_and_stats() -> anyhow::Result<()> {
         let root = temp.path().join(label);
         fs::create_dir(&root)?;
         fs::write(root.join(format!("{label}.txt")), word)?;
-        let o = ScanOptions { root: root.to_string_lossy().into_owned(), label: label.into(), index_content: true, ..Default::default() };
+        let o = ScanOptions {
+            root: root.to_string_lossy().into_owned(),
+            label: label.into(),
+            index_content: true,
+            ..Default::default()
+        };
         crate::scanner::scan(&s, o, &cancel, &|_| {})?;
     }
-    let first = s.lock().unwrap().sources("", 0, 10)?.0.into_iter().find(|x| x.label == "Prvi").unwrap().id;
+    let first = s
+        .lock()
+        .unwrap()
+        .sources("", 0, 10)?
+        .0
+        .into_iter()
+        .find(|x| x.label == "Prvi")
+        .unwrap()
+        .id;
     assert_eq!(s.lock().unwrap().stats()?["files"], 2);
     s.lock().unwrap().remove_source(&first)?;
     let mut store = s.lock().unwrap();
     let stats = store.stats()?;
-    assert_eq!((stats["files"].as_i64(), stats["sources"].as_i64(), stats["documents"].as_i64()), (Some(1), Some(1), Some(1)));
-    let find = |word: &str| SearchOptions { query: word.into(), mode: "all".into(), ..Default::default() };
+    assert_eq!(
+        (
+            stats["files"].as_i64(),
+            stats["sources"].as_i64(),
+            stats["documents"].as_i64()
+        ),
+        (Some(1), Some(1), Some(1))
+    );
+    let find = |word: &str| SearchOptions {
+        query: word.into(),
+        mode: "all".into(),
+        ..Default::default()
+    };
     let hits = store.search(find("secondneedle"))?.results;
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].name, "Drugi.txt");
     assert!(store.search(find("firstneedle"))?.results.is_empty());
-    assert!(store.search(SearchOptions { query: "Prvi".into(), ..Default::default() })?.results.is_empty());
+    assert!(
+        store
+            .search(SearchOptions {
+                query: "Prvi".into(),
+                ..Default::default()
+            })?
+            .results
+            .is_empty()
+    );
     assert!(store.remove_source(&first).is_err());
     Ok(())
 }
 #[test]
 fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()> {
-    use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit, Payload}};
+    use crate::viewer::{CHUNK, LANES, MEMORY_KIB, PASSES};
+    use aes_gcm::{
+        Aes256Gcm, Nonce,
+        aead::{Aead, KeyInit, Payload},
+    };
     use argon2::{Algorithm, Argon2, Params, Version};
     use base64::{Engine, engine::general_purpose::STANDARD as B64};
-    use crate::viewer::{CHUNK, LANES, MEMORY_KIB, PASSES};
     use std::sync::{Arc, Mutex, atomic::AtomicBool};
     let temp = tempfile::tempdir()?;
     let data = temp.path().join("data");
@@ -1891,23 +1926,47 @@ fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()
     fs::create_dir(&root)?;
     fs::write(root.join("secretname.txt"), "x")?;
     let s = Arc::new(Mutex::new(Store::open(&data, "")?));
-    let o = ScanOptions { root: root.to_string_lossy().into_owned(), label: "Disk".into(), ..Default::default() };
+    let o = ScanOptions {
+        root: root.to_string_lossy().into_owned(),
+        label: "Disk".into(),
+        ..Default::default()
+    };
     crate::scanner::scan(&s, o, &AtomicBool::new(false), &|_| {})?;
     let out = temp.path().join("reader");
     assert!(s.lock().unwrap().export_viewer(&out, "short").is_err());
-    s.lock().unwrap().export_viewer(&out, "a long enough password")?;
-    assert!(s.lock().unwrap().export_viewer(&out, "a long enough password").is_err(), "an existing folder is never overwritten");
+    s.lock()
+        .unwrap()
+        .export_viewer(&out, "a long enough password")?;
+    assert!(
+        s.lock()
+            .unwrap()
+            .export_viewer(&out, "a long enough password")
+            .is_err(),
+        "an existing folder is never overwritten"
+    );
     assert!(!temp.path().join("reader.partial").exists());
     let page = fs::read_to_string(out.join("allfiles.html"))?;
-    assert!(page.contains("id=\"viewer-src\"") && page.contains("default-src 'none'") && !page.contains("src=\"/app.js\""));
+    assert!(
+        page.contains("id=\"viewer-src\"")
+            && page.contains("default-src 'none'")
+            && !page.contains("src=\"/app.js\"")
+    );
     let sealed = fs::read(out.join("data/catalog.db"))?;
     assert!(!sealed.windows(14).any(|w| w == b"secretname.txt"));
     let info: serde_json::Value = serde_json::from_slice(&fs::read(out.join("data/key.json"))?)?;
     let derive = |password: &str| -> anyhow::Result<Aes256Gcm> {
         let mut key = [0u8; 32];
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).unwrap())
-            .hash_password_into(password.as_bytes(), &B64.decode(info["salt"].as_str().unwrap())?, &mut key)
-            .unwrap();
+        Argon2::new(
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).unwrap(),
+        )
+        .hash_password_into(
+            password.as_bytes(),
+            &B64.decode(info["salt"].as_str().unwrap())?,
+            &mut key,
+        )
+        .unwrap();
         Ok(Aes256Gcm::new_from_slice(&key).unwrap())
     };
     let decrypt = |cipher: &Aes256Gcm, bytes: &[u8]| -> Option<Vec<u8>> {
@@ -1917,15 +1976,30 @@ fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()
         for i in 0..count {
             let block = &bytes[i * step..bytes.len().min((i + 1) * step)];
             let aad = format!("catalog.db\0{i}\0{count}");
-            plain.extend(cipher.decrypt(Nonce::from_slice(&block[..12]), Payload { msg: &block[12..], aad: aad.as_bytes() }).ok()?);
+            plain.extend(
+                cipher
+                    .decrypt(
+                        Nonce::from_slice(&block[..12]),
+                        Payload {
+                            msg: &block[12..],
+                            aad: aad.as_bytes(),
+                        },
+                    )
+                    .ok()?,
+            );
         }
         Some(plain)
     };
     assert!(decrypt(&derive("another long password")?, &sealed).is_none());
-    let plain = decrypt(&derive("a long enough password")?, &sealed).expect("right password decrypts");
+    let plain =
+        decrypt(&derive("a long enough password")?, &sealed).expect("right password decrypts");
     let copy = temp.path().join("copy.sqlite");
     fs::write(&copy, plain)?;
-    let files: i64 = rusqlite::Connection::open(&copy)?.query_row("SELECT count(*) FROM files WHERE name='secretname.txt'", [], |r| r.get(0))?;
+    let files: i64 = rusqlite::Connection::open(&copy)?.query_row(
+        "SELECT count(*) FROM files WHERE name='secretname.txt'",
+        [],
+        |r| r.get(0),
+    )?;
     assert_eq!(files, 1);
     let mut tampered = sealed.clone();
     tampered[100] ^= 1;

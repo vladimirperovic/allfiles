@@ -3,13 +3,20 @@
 //! `data/catalog.db` is the catalog (without document text) as AES-256-GCM blocks of up to 4 MiB:
 //! 12-byte nonce, ciphertext, 16-byte tag. The key is Argon2id(password, salt). The additional data binds
 //! the file name, the block number and the block count, so blocks cannot be swapped and files cannot be cut short.
-use aes_gcm::{Aes256Gcm, Nonce, aead::{Aead, KeyInit, Payload}};
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload},
+};
 use anyhow::{Result, anyhow, bail};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use rusqlite::Connection;
 use serde_json::json;
-use std::{fs, io::{Read, Write}, path::{Path, PathBuf}};
+use std::{
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
 
 pub(crate) const CHUNK: usize = 4 * 1024 * 1024;
 pub(crate) const MEMORY_KIB: u32 = 65536;
@@ -38,7 +45,13 @@ fn seal(cipher: &Aes256Gcm, name: &str, source: &Path, target: &Path) -> Result<
         getrandom::fill(&mut nonce).map_err(|e| anyhow!(e.to_string()))?;
         let aad = format!("{name}\0{i}\0{count}");
         let sealed = cipher
-            .encrypt(Nonce::from_slice(&nonce), Payload { msg: &block[..want], aad: aad.as_bytes() })
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &block[..want],
+                    aad: aad.as_bytes(),
+                },
+            )
             .map_err(|_| anyhow!("Šifrovanje nije uspjelo"))?;
         out.write_all(&nonce)?;
         out.write_all(&sealed)?;
@@ -59,10 +72,19 @@ fn worker_source() -> String {
 
 /// The reader page: the application's own page with everything inlined, plus the password screen.
 pub fn html() -> String {
-    let icon = format!("data:image/svg+xml;base64,{}", B64.encode(include_bytes!("../web/logo.svg")));
-    let head = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\"><link rel=\"icon\" href=\"{icon}\"><style>{}\n{UNLOCK_CSS}</style>", include_str!("../web/style.css"));
+    let icon = format!(
+        "data:image/svg+xml;base64,{}",
+        B64.encode(include_bytes!("../web/logo.svg"))
+    );
+    let head = format!(
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{CSP}\"><link rel=\"icon\" href=\"{icon}\"><style>{}\n{UNLOCK_CSS}</style>",
+        include_str!("../web/style.css")
+    );
     let mut page = include_str!("../web/index.html")
-        .replace("<link rel=\"icon\" href=\"/logo.svg\" type=\"image/svg+xml\">", &head)
+        .replace(
+            "<link rel=\"icon\" href=\"/logo.svg\" type=\"image/svg+xml\">",
+            &head,
+        )
         .replace("  <link rel=\"stylesheet\" href=\"/style.css\">\n", "")
         .replace("  <script src=\"/i18n.js\" defer></script>\n", "")
         .replace("  <script src=\"/app.js\" defer></script>\n", "")
@@ -76,7 +98,10 @@ pub fn html() -> String {
     })
     .to_string()
     .replace('<', "\\u003c");
-    let body = format!("{LOCK}<script type=\"application/json\" id=\"viewer-src\">{src}</script><script>{}</script>", include_str!("../web/viewer/boot.js"));
+    let body = format!(
+        "{LOCK}<script type=\"application/json\" id=\"viewer-src\">{src}</script><script>{}</script>",
+        include_str!("../web/viewer/boot.js")
+    );
     if let Some(at) = page.rfind("</body>") {
         page.insert_str(at, &body);
     }
@@ -104,19 +129,37 @@ pub fn export(conn: &Connection, destination: &Path, password: &str) -> Result<P
         let mut salt = [0u8; 16];
         getrandom::fill(&mut salt).map_err(|e| anyhow!(e.to_string()))?;
         let mut key = [0u8; 32];
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).map_err(|e| anyhow!(e.to_string()))?)
-            .hash_password_into(password.as_bytes(), &salt, &mut key)
-            .map_err(|e| anyhow!(e.to_string()))?;
+        Argon2::new(
+            Algorithm::Argon2id,
+            Version::V0x13,
+            Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).map_err(|e| anyhow!(e.to_string()))?,
+        )
+        .hash_password_into(password.as_bytes(), &salt, &mut key)
+        .map_err(|e| anyhow!(e.to_string()))?;
         let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| anyhow!("Neispravan ključ"))?;
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|e| anyhow!(e.to_string()))?;
         let check = cipher
-            .encrypt(Nonce::from_slice(&nonce), Payload { msg: b"ALLFILES", aad: b"check\x000\x001" })
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: b"ALLFILES",
+                    aad: b"check\x000\x001",
+                },
+            )
             .map_err(|_| anyhow!("Šifrovanje nije uspjelo"))?;
-        seal(&cipher, "catalog.db", &plain, &partial.join("data").join("catalog.db"))?;
+        seal(
+            &cipher,
+            "catalog.db",
+            &plain,
+            &partial.join("data").join("catalog.db"),
+        )?;
         fs::remove_file(&plain)?;
         let info = json!({"v":1,"kdf":"argon2id","m":MEMORY_KIB,"t":PASSES,"p":LANES,"salt":B64.encode(salt),"check":B64.encode([nonce.to_vec(), check].concat()),"version":crate::store::VERSION});
-        fs::write(partial.join("data").join("key.json"), serde_json::to_vec(&info)?)?;
+        fs::write(
+            partial.join("data").join("key.json"),
+            serde_json::to_vec(&info)?,
+        )?;
         fs::write(partial.join("allfiles.html"), html())?;
         fs::write(partial.join("PROCITAJ.txt"), README)?;
         fs::rename(&partial, destination)?;
