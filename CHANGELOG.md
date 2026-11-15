@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A small search box above the media list in the sidebar filters the list by name while you type (case, diacritics and word order do not matter; Escape clears it). It only hides entries in the sidebar; the media themselves and the other views are not affected.
+- The sidebar width can be changed: drag the edge between the sidebar and the content, use the arrow keys (Shift for larger steps) with the edge focused, press Home to reset, or double-click it. Long medium names are easier to read; the width is remembered in this browser. It applies at widths above 1000 px; the compact icon sidebar and the phone layout are unchanged.
 - Fixed the folder view hiding files of media imported with absolute paths (`/home/...`, `//server/share/...`, or a leading `\` in a report): such folders were missing from the top level, so their files could only be found by searching. They are now listed there under their full first name, and the path bar handles them.
 - Importing from the interface no longer forces every medium to `bluray`. A WinCatalog database keeps the kind of each medium (optical discs `bluray`, others `external`), as the command line already did; reports without that information still default to `bluray`.
 - The browser demo answers the folder view, so choosing a medium there works again instead of showing "search is unavailable". Its browser check opens folders, which also repairs the Pages workflow.

@@ -46,6 +46,7 @@
   <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div>
   <div class="app-shell">
     <aside class="sidebar">
+      <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="Širina bočne trake" title="Prevucite za promjenu širine bočne trake (dvoklik vraća na početnu)"></div>
       <a class="brand" href="#search" aria-label="AllFiles početna"><img src="/logo.svg" alt="" width="42" height="42"><span>All<span class="brand-light">Files</span><small>VAŠ LIČNI KATALOG</small></span></a>
       <div class="sidebar-section-label">RADNI PROSTOR</div>
       <nav class="navigation" aria-label="Glavna navigacija">
@@ -55,7 +56,9 @@
       </nav>
       <div class="sidebar-divider"></div>
       <div class="sidebar-section-label media-heading">MOJA BIBLIOTEKA<button class="icon-button tiny" data-action="add-source" aria-label="Dodaj medij"><svg class="icon"><use href="#i-plus"/></svg></button></div>
+      <div class="sidebar-search" id="sidebar-source-search-wrap" hidden><input id="sidebar-source-search" type="search" placeholder="Pretraži medije…" aria-label="Pretraži medije po nazivu" autocomplete="off" spellcheck="false"></div>
       <div class="sidebar-sources" id="sidebar-sources" role="toolbar" aria-label="Mediji u biblioteci" aria-orientation="vertical"><p class="sidebar-empty">Vaši računari, diskovi i arhive na jednom mestu.</p></div>
+      <p class="sidebar-empty" id="sidebar-no-match" hidden>Nijedan medij nema taj naziv.</p>
       <div class="sidebar-bottom">
         <div class="privacy-card"><span class="privacy-icon"><svg class="icon"><use href="#i-shield"/></svg></span><div><strong id="privacy-title">Lokalno. Lično.</strong><p id="privacy-description">Vaši fajlovi ostaju vaši.</p></div></div>
         <button class="sidebar-utility" data-action="export"><svg class="icon"><use href="#i-download"/></svg><span>Spakuj za USB</span><svg class="icon small"><use href="#i-chevron"/></svg></button>

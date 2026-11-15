@@ -23,6 +23,8 @@
     'AllFiles početna': 'AllFiles home', 'VAŠ LIČNI KATALOG': 'YOUR CATALOG',
     'RADNI PROSTOR': 'WORKSPACE', 'Glavna navigacija': 'Main navigation', 'Pretraga': 'Search',
     'Moji mediji': 'My media', 'Indeksiranje': 'Indexing', 'MOJA BIBLIOTEKA': 'MY LIBRARY',
+    'Pretraži medije…': 'Search media…', 'Pretraži medije po nazivu': 'Search media by name', 'Nijedan medij nema taj naziv.': 'No medium has that name.',
+    'Širina bočne trake': 'Sidebar width', 'Prevucite za promjenu širine bočne trake (dvoklik vraća na početnu)': 'Drag to resize the sidebar (double-click to reset)',
     'Dodaj medij': 'Add media', 'Vaši računari, diskovi i arhive na jednom mestu.': 'Your computers, drives and archives in one place.',
     'Lokalno. Lično.': 'Local. Personal.', 'Vaši fajlovi ostaju vaši.': 'Your files stay yours.',
     'Spakuj za USB': 'Export for USB', 'AllFiles · lokalni katalog': 'AllFiles · local catalog',

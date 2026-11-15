@@ -277,7 +277,7 @@
     const language = i18n.language || '';
     const items = state.sources.map(source => ({ source, key: JSON.stringify([language, source.id, source.root, source.label, source.kind, source.location, source.last_scan, source.file_count, source.total_size]) }));
     const renderKey = language + '\n' + items.map(item => item.key).join('\n');
-    if (renderKey === sourcesRenderKey) { updateSourceSelection(); renderMediaFilter(); return; }
+    if (renderKey === sourcesRenderKey) { filterSidebarSources(); renderMediaFilter(); return; }
     const nextViews = new Map();
     $('#nav-source-count').textContent = i18n.formats.number.format(state.sources.length);
     $('#source-card-count').textContent = i18n.formats.number.format(state.sources.length);
@@ -333,9 +333,23 @@
     sourcesRenderKey = renderKey;
     sourceFilter.value = selectedFilter;
     const add = element('button', 'add-source-card'); add.append(icon('plus'), element('strong', '', t('Dodajte novi medij')), element('span', '', t('Proširite svoju biblioteku'))); add.addEventListener('click', () => sourceDialog()); cards.append(add);
-    updateSourceSelection();
+    filterSidebarSources();
     renderMediaFilter();
     if (state.ready && sourceFilter.value !== selectedFilter) searchChanged(true);
+  }
+  function filterSidebarSources() {
+    const terms = fold($('#sidebar-source-search').value).trim().split(/\s+/).filter(Boolean);
+    let shown = 0;
+    state.sources.forEach(source => {
+      const view = sourceViews.get(source.id);
+      if (!view) return;
+      const visible = terms.every(term => fold(source.label).includes(term));
+      view.sideButton.hidden = !visible;
+      if (visible) shown++;
+    });
+    $('#sidebar-source-search-wrap').hidden = state.sources.length === 0;
+    $('#sidebar-no-match').hidden = !(terms.length && state.sources.length && shown === 0);
+    updateSourceSelection();
   }
   function renderMediaFilter() {
     const terms = fold($('#media-search').value).trim().split(/\s+/).filter(Boolean);
@@ -359,11 +373,11 @@
   }
   function updateSourceSelection(reveal = false) {
     const selected = $('#source-filter').value;
-    const buttons = $$('.sidebar-source');
+    const all = $$('.sidebar-source'), buttons = all.filter(button => !button.hidden);
     if (reveal && selected) sidebarFocusId = selected;
     const target = buttons.find(button => button.dataset.sourceId === sidebarFocusId) || buttons.find(button => button.dataset.sourceId === selected) || buttons[0];
     sidebarFocusId = target?.dataset.sourceId || null;
-    buttons.forEach(button => {
+    all.forEach(button => {
       const active = button.dataset.sourceId === selected;
       button.classList.toggle('selected', active);
       button.setAttribute('aria-pressed', String(active));
@@ -973,11 +987,15 @@
     $('#source-cards').scrollTop = 0;
     savePreference('allfiles.mediaView', value);
   });
+  $('#sidebar-source-search').addEventListener('input', filterSidebarSources);
+  $('#sidebar-source-search').addEventListener('keydown', event => {
+    if (event.key === 'Escape' && event.target.value) { event.target.value = ''; filterSidebarSources(); event.stopPropagation(); }
+  });
   $('#media-search').addEventListener('input', () => { renderMediaFilter(); $('#source-cards').scrollTop = 0; });
   $('#media-kind-filter').addEventListener('change', () => { renderMediaFilter(); $('#source-cards').scrollTop = 0; });
   $('#sidebar-sources').addEventListener('keydown', event => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    const buttons = $$('.sidebar-source');
+    const buttons = $$('.sidebar-source').filter(button => !button.hidden);
     if (!buttons.length) return;
     const index = buttons.indexOf(event.target.closest('.sidebar-source'));
     if (index < 0) return;
@@ -1064,11 +1082,68 @@
     $$('input,select').forEach(input => input.setCustomValidity(''));
   });
 
+  function setupSidebarResizer() {
+    const shell = $('.app-shell'), handle = $('#sidebar-resizer'), sidebar = $('.sidebar');
+    if (!shell || !handle || !sidebar) return;
+    const key = 'allfiles.sidebarWidth', MIN = 200;
+    const max = () => Math.max(MIN, Math.min(640, Math.floor(window.innerWidth * 0.5)));
+    const clamp = width => Math.max(MIN, Math.min(max(), Math.round(width)));
+    let custom = null;
+    function sync() {
+      const width = Math.round(sidebar.getBoundingClientRect().width);
+      handle.setAttribute('aria-valuemin', String(MIN));
+      handle.setAttribute('aria-valuemax', String(max()));
+      handle.setAttribute('aria-valuenow', String(width));
+    }
+    function apply(width) {
+      custom = width === null ? null : clamp(width);
+      shell.classList.toggle('custom-width', custom !== null);
+      if (custom === null) shell.style.removeProperty('--sidebar-w');
+      else shell.style.setProperty('--sidebar-w', custom + 'px');
+      sync();
+    }
+    function persist() {
+      try { if (custom === null) localStorage.removeItem(key); else localStorage.setItem(key, String(custom)); }
+      catch { /* Preferences are optional. */ }
+    }
+    try {
+      const saved = parseInt(localStorage.getItem(key), 10);
+      if (Number.isFinite(saved)) apply(saved);
+    } catch { /* Preferences are optional. */ }
+    sync();
+    let drag = null;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      drag = { x: event.clientX, width: sidebar.getBoundingClientRect().width };
+      handle.setPointerCapture(event.pointerId);
+      shell.classList.add('resizing');
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', event => { if (drag) apply(drag.width + event.clientX - drag.x); });
+    const finish = () => { if (!drag) return; drag = null; shell.classList.remove('resizing'); persist(); };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    handle.addEventListener('lostpointercapture', finish);
+    handle.addEventListener('dblclick', () => { apply(null); persist(); });
+    handle.addEventListener('keydown', event => {
+      const step = event.shiftKey ? 48 : 16, current = sidebar.getBoundingClientRect().width;
+      if (event.key === 'ArrowLeft') apply(current - step);
+      else if (event.key === 'ArrowRight') apply(current + step);
+      else if (event.key === 'Home') apply(null);
+      else if (event.key === 'End') apply(max());
+      else return;
+      event.preventDefault();
+      persist();
+    });
+    window.addEventListener('resize', () => { if (custom !== null) apply(custom); else sync(); });
+  }
+
   async function initialize() {
     const density = preference('allfiles.density', ['compact', 'comfortable'], 'compact');
     $('#density-select').value = document.documentElement.dataset.density = density;
     const mediaView = preference('allfiles.mediaView', ['list', 'cards'], 'list');
     $('#media-view-select').value = document.documentElement.dataset.mediaView = $('#source-cards').dataset.mediaView = mediaView;
+    setupSidebarResizer();
     setView(location.hash.slice(1));
     try {
       const session = await api('/api/session');
