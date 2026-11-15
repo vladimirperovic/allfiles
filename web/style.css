@@ -1121,4 +1121,13 @@ button.crumb:hover{background:#eddbff1c}
 .sidebar-search{padding:0 4px 10px}
 .sidebar-search input{width:100%;box-sizing:border-box;background:#ffffff0d;border:1px solid var(--line);border-radius:9px;color:inherit;font:inherit;font-size:12.5px;padding:8px 10px}
 .sidebar-search input:focus{outline:none;border-color:#cba8f3aa}
+.sidebar-search{display:grid;gap:6px}
+.sidebar-search select{width:100%;box-sizing:border-box;background:#ffffff0d;border:1px solid var(--line);border-radius:9px;color:inherit;font:inherit;font-size:12px;padding:6px 8px}
+.sidebar-search select option{background:#1d1730;color:#f1ecff}
+.sidebar-source .source-name{flex:1;min-width:0}
+.sidebar-source .source-month{flex:none;margin-left:auto;font:500 11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;color:#b9afd6;opacity:.85}
+.button-teal{background:#12a594;color:#fff;box-shadow:0 4px 20px #12a59433}
+.button-teal:hover{background:#17bda9;box-shadow:0 4px 22px #12a59455}
+.button-teal .icon{width:17px;height:17px}
+@media(max-width:1250px){.button-teal>span{display:none}.button-teal{padding:8px 10px}}
 @media(max-width:1000px){.sidebar-search{display:none!important}}

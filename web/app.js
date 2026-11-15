@@ -272,10 +272,23 @@
       if (requestId === state.sourcesRequest) { state.sourcesPending = false; state.sourcesController = null; }
     }
   }
+  // Godina i mjesec skeniranja (lokalno vrijeme), npr. „2026-11”.
+  function scanMonth(value) {
+    const date = value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime()) ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}` : '';
+  }
+  const sourceSort = () => preference('allfiles.sourceSort', ['name', 'new', 'old'], 'name');
+  function sortedSources(list) {
+    const mode = sourceSort(), time = source => Date.parse(source.last_scan) || 0;
+    const byName = (a, b) => String(a.label).localeCompare(String(b.label), undefined, { sensitivity: 'base', numeric: true });
+    if (mode === 'new') return [...list].sort((a, b) => time(b) - time(a) || byName(a, b));
+    if (mode === 'old') return [...list].sort((a, b) => (time(a) || Infinity) - (time(b) || Infinity) || byName(a, b));
+    return [...list];
+  }
   function renderSources() {
     const language = i18n.language || '';
-    const items = state.sources.map(source => ({ source, key: JSON.stringify([language, source.id, source.root, source.label, source.kind, source.location, source.last_scan, source.file_count, source.total_size]) }));
-    const renderKey = language + '\n' + items.map(item => item.key).join('\n');
+    const items = sortedSources(state.sources).map(source => ({ source, key: JSON.stringify([language, source.id, source.root, source.label, source.kind, source.location, source.last_scan, source.file_count, source.total_size]) }));
+    const renderKey = language + '\n' + sourceSort() + '\n' + items.map(item => item.key).join('\n');
     if (renderKey === sourcesRenderKey) { filterSidebarSources(); renderMediaFilter(); return; }
     const nextViews = new Map();
     $('#nav-source-count').textContent = i18n.formats.number.format(state.sources.length);
@@ -297,7 +310,9 @@
       const option = element('option', '', source.label); option.value = String(source.id); sourceFilter.append(option);
       const sideButton = element('button', 'sidebar-source');
       sideButton.title = source.label;
+      const scanned = scanMonth(source.last_scan);
       sideButton.append(icon(kindIcons[source.kind] || 'drive'), element('span', 'source-name', source.label));
+      if (scanned) { const tag = element('time', 'source-month', scanned); tag.title = t('Evidentirano {date}', { date: fmtDate(source.last_scan) }); sideButton.append(tag); }
       sideButton.dataset.sourceId = source.id;
       sideButton.addEventListener('click', () => filterToSource(source.id));
       sideButton.addEventListener('focus', () => { sidebarFocusId = source.id; updateSourceSelection(); });
@@ -1005,6 +1020,8 @@
     $('#source-cards').scrollTop = 0;
     savePreference('allfiles.mediaView', value);
   });
+  $('#sidebar-source-sort').value = sourceSort();
+  $('#sidebar-source-sort').addEventListener('change', event => { savePreference('allfiles.sourceSort', event.target.value); renderSources(); });
   $('#sidebar-source-search').addEventListener('input', filterSidebarSources);
   $('#sidebar-source-search').addEventListener('keydown', event => {
     if (event.key === 'Escape' && event.target.value) { event.target.value = ''; filterSidebarSources(); event.stopPropagation(); }
