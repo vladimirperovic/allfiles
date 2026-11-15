@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Browser reader.** *Export for USB* has a new option, **Browser reader (allfiles.html)** (`POST /api/export` with `"browser": true`). It writes a new folder with an encrypted catalog (`data/catalog.db`, AES-256-GCM blocks of 4 MiB, key from Argon2id) and one `allfiles.html` that opens in any browser on any computer with no installation and no network. The page asks for the `data` folder and the password, decrypts the catalog in memory (SQLite WebAssembly) and offers the same library, search by name and path (case, diacritics, type, medium, sort), folders and file details; results match the service on a real catalog of 362,075 files. It is read-only and does not contain document text.
 - A medium can be removed from the catalog: **Remove from catalog** on its card in *My media* (after a confirmation), or `POST /api/remove {"id": …}`. Its files, folders, names, extracted text, tags and thumbnails leave the catalog and the search indexes in one transaction; the original files are never touched. It is refused while indexing or exporting runs.
 - Removed the "Local. Personal." card from the bottom of the sidebar. Whether the catalog is encrypted is still shown by the lock icon in the top bar.
 - A small search box above the media list in the sidebar filters the list by name while you type (case, diacritics and word order do not matter; Escape clears it). It only hides entries in the sidebar; the media themselves and the other views are not affected.

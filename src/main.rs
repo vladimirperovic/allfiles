@@ -11,6 +11,7 @@ mod server;
 mod store;
 #[cfg(test)]
 mod tests;
+mod viewer;
 mod w3cat;
 fn main() {
     if let Err(e) = cli::run() {

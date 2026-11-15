@@ -1,0 +1,5 @@
+Libraries packed into allfiles.html (unmodified except sqlite3.js: import.meta.url replaced by a fixed
+address and the ES-module export removed, so it runs from a Blob worker without a network):
+
+sqlite3.js, sqlite3.wasm   @sqlite.org/sqlite-wasm 3.54.1-build1   Apache-2.0   https://sqlite.org/wasm
+argon2.js                  hash-wasm 4.13.0 (argon2)                MIT          https://github.com/Daninet/hash-wasm

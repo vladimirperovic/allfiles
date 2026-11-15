@@ -28,6 +28,7 @@
     'Ukloni iz kataloga': 'Remove from catalog', 'Medij je uklonjen iz kataloga.': 'The medium was removed from the catalog.', 'Nema tog medija': 'No such medium',
     'Ukloniti medij „{label}” iz kataloga? Originalni fajlovi se ne brišu, a medij se može ponovo dodati skeniranjem.': 'Remove the medium “{label}” from the catalog? Original files are not deleted, and the medium can be added again by scanning it.',
     'Sačekajte da se indeksiranje ili izvoz završi pre uklanjanja medija': 'Wait for indexing or export to finish before removing a medium',
+    'Čitač za pregledač (allfiles.html)': 'Browser reader (allfiles.html)', 'Šifrovan katalog i jedan HTML fajl koji se otvara u bilo kom pregledaču, bez instalacije. Samo za čitanje, bez sadržaja dokumenata; traži lozinku.': 'An encrypted catalog and a single HTML file that opens in any browser, with no installation. Read-only, without document text; asks for the password.',
     'Dodaj medij': 'Add media', 'Vaši računari, diskovi i arhive na jednom mestu.': 'Your computers, drives and archives in one place.',
     'Spakuj za USB': 'Export for USB', 'AllFiles · lokalni katalog': 'AllFiles · local catalog',
     'Zatvori AllFiles': 'Close AllFiles', 'Biblioteka': 'Library', 'Lokalni prostor': 'Local workspace',

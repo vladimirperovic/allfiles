@@ -1516,6 +1516,11 @@ impl Store {
             file_result,
         )?)
     }
+    /// Encrypted catalog plus `allfiles.html`, readable in any browser (see `viewer.rs`).
+    pub fn export_viewer(&mut self, destination: &Path, password: &str) -> Result<PathBuf> {
+        self.check()?;
+        crate::viewer::export(&self.conn, &absolute(destination)?, password)
+    }
     pub fn export(
         &mut self,
         destination: &Path,

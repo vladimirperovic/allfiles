@@ -148,6 +148,18 @@ The output must be a **new folder under an existing directory**. Export refuses 
 
 An ordinary export preserves the source's encryption state: plaintext stays plaintext; an encrypted catalog produces an encrypted copy with the same password and its required `encryption.json`. Keep both databases, when present, and the matching manifest together. Do not copy individual live SQLite files while the application is running; use export for a consistent copy. Export is currently synchronous and has no progress/cancel control.
 
+## Browser reader (no installation)
+
+**Export for USB → Browser reader (allfiles.html)** writes a new folder with `allfiles.html` and `data/`
+(`key.json`, `catalog.db`). Copy it to a USB drive or burn it to a disc. On any computer open `allfiles.html` in
+Chrome, Edge, Firefox or Safari, choose the `data` folder and type the password: the catalog is decrypted in the
+browser's memory (about 1 GB of free memory for a catalog of a million files) and you can browse media, search names
+and paths and open folders. Nothing is installed, sent or written to disk. It is read-only and has no document text;
+use the application for content search, scanning and removal. The format is AES-256-GCM in blocks of up to 4 MiB
+(12-byte nonce, ciphertext, 16-byte tag) with a key from Argon2id (64 MiB, 3 passes, 4 lanes); the additional data binds
+file name, block number and block count. The page has a Content-Security-Policy of `default-src 'none'`.
+Bundled: [SQLite WASM](https://sqlite.org/wasm) (Apache-2.0) and [hash-wasm](https://github.com/Daninet/hash-wasm) (MIT).
+
 ## Optional catalog encryption
 
 AllFiles can encrypt the database files independently of VeraCrypt. It uses **Adiantum through a SQLite VFS**, reading and writing encrypted data directly without a plaintext working copy.

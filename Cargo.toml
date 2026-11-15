@@ -41,6 +41,7 @@ pdf-extract = "=0.12.1"
 unicode-normalization = "0.1"
 rpassword = "7"
 url = "2"
+aes-gcm = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

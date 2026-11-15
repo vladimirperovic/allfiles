@@ -826,6 +826,7 @@
     if (id === '#export-dialog') {
       clearExportSecrets();
       $('#export-encrypt').checked = false;
+      $('#export-browser').checked = false;
       updateExportEncryption();
     }
     dialog.showModal();
@@ -875,14 +876,18 @@
   }
   function updateExportEncryption() {
     const encrypted = Boolean(state.status?.encrypted);
+    const browser = $('#export-browser').checked;
+    if (browser) { $('#export-encrypt').checked = true; $('#export-content').checked = false; }
     const enabled = $('#export-encrypt').checked;
+    $('#export-content').disabled = browser || exportInProgress;
+    $('#export-browser').disabled = exportInProgress;
     $('#export-encrypt-label').textContent = encrypted ? t('Nova lozinka za kopiju') : t('Šifruj kopiju lozinkom');
     $('#export-encrypt-description').textContent = encrypted
       ? t('Kopija ostaje šifrovana postojećom lozinkom. Uključite samo ako želite novu lozinku za kopiju.')
       : t('Novi folder sadržaće šifrovanu kopiju. Postojeći katalog se ne menja.');
     $('#export-password-fields').hidden = !enabled;
     $('#export-encrypt').setAttribute('aria-expanded', String(enabled));
-    $('#export-encrypt').disabled = exportInProgress;
+    $('#export-encrypt').disabled = browser || exportInProgress;
     ['#export-password', '#export-password-repeat'].forEach(selector => {
       $(selector).required = enabled;
       $(selector).disabled = !enabled || exportInProgress;
@@ -893,7 +898,7 @@
     let password = encrypt ? $('#export-password').value : '';
     if (encrypt && [...password].length < 12) throw new Error(t('Lozinka mora imati najmanje 12 znakova. Razmaci su dozvoljeni.'));
     if (encrypt && password !== $('#export-password-repeat').value) throw new Error(t('Lozinke se ne podudaraju. Unesite istu lozinku u oba polja.'));
-    const payload = { destination: $('#export-destination').value.trim(), include_content: $('#export-content').checked, encrypt, password };
+    const payload = { destination: $('#export-destination').value.trim(), include_content: $('#export-content').checked, encrypt, password, browser: $('#export-browser').checked };
     exportRequestPayload = payload;
     password = '';
     exportInProgress = true;
@@ -1029,6 +1034,7 @@
   $('#source-form').addEventListener('submit', event => submitForm(event, '#source-form-error', startScan));
   $('#import-form').addEventListener('submit', event => submitForm(event, '#import-form-error', startImport));
   $('#export-form').addEventListener('submit', event => submitForm(event, '#export-form-error', exportCatalog));
+  $('#export-browser').addEventListener('change', updateExportEncryption);
   $('#export-encrypt').addEventListener('change', () => { if (!$('#export-encrypt').checked) clearExportSecrets(); updateExportEncryption(); });
   $('#export-dialog').addEventListener('close', clearExportSecrets);
   $('#export-dialog').addEventListener('cancel', clearExportSecrets);

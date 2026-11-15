@@ -524,6 +524,7 @@ fn api(
                 include_content: bool,
                 encrypt: bool,
                 password: String,
+                browser: bool,
             }
             let mut o: Export = decode(bytes)?;
             let password = Zeroizing::new(std::mem::take(&mut o.password));
@@ -535,6 +536,10 @@ fn api(
             }
             let _export = app.reserve_export()?;
             let mut s = app.store.lock().unwrap();
+            if o.browser {
+                let p = s.export_viewer(Path::new(&o.destination), &password)?;
+                return Ok((200, json!({"path":p,"encrypted":true,"browser":true})));
+            }
             let p = s.export(
                 Path::new(&o.destination),
                 o.include_content,
