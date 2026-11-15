@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Removed the "Local. Personal." card from the bottom of the sidebar. Whether the catalog is encrypted is still shown by the lock icon in the top bar.
 - A small search box above the media list in the sidebar filters the list by name while you type (case, diacritics and word order do not matter; Escape clears it). It only hides entries in the sidebar; the media themselves and the other views are not affected.
 - The sidebar width can be changed: drag the edge between the sidebar and the content, use the arrow keys (Shift for larger steps) with the edge focused, press Home to reset, or double-click it. Long medium names are easier to read; the width is remembered in this browser. It applies at widths above 1000 px; the compact icon sidebar and the phone layout are unchanged.
 - Fixed the folder view hiding files of media imported with absolute paths (`/home/...`, `//server/share/...`, or a leading `\` in a report): such folders were missing from the top level, so their files could only be found by searching. They are now listed there under their full first name, and the path bar handles them.

@@ -178,8 +178,6 @@
     encryptionIcon.dataset.encrypted = String(Boolean(status.encrypted));
     $('use', encryptionIcon).setAttribute('href', status.encrypted ? '#i-lock' : '#i-unlock');
     $('#encryption-status').hidden = !status.encrypted;
-    $('#privacy-title').textContent = status.encrypted ? t('Katalog je šifrovan.') : t('Lokalno. Lično.');
-    $('#privacy-description').textContent = status.encrypted ? t('Otključan u ovoj sesiji.') : t('Vaši fajlovi ostaju vaši.');
     updateExportEncryption();
     $('#nav-job-dot').hidden = !state.busy;
     renderJob(status.job);
