@@ -427,7 +427,7 @@ fn api(
 ) -> Result<(u16, Value)> {
     let post = matches!(
         path,
-        "/api/scan" | "/api/import" | "/api/cancel" | "/api/export" | "/api/open" | "/api/shutdown"
+        "/api/scan" | "/api/import" | "/api/cancel" | "/api/export" | "/api/remove" | "/api/open" | "/api/shutdown"
     );
     if (post && method != "POST") || (!post && method != "GET") {
         return Ok((405, json!({"error":"Method not allowed"})));
@@ -542,6 +542,21 @@ fn api(
             )?;
             *app.stats_cache.lock().unwrap() = s.stats()?;
             json!({"path":p,"encrypted":o.encrypt||s.encryption.is_some()})
+        }
+        "/api/remove" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Remove {
+                id: String,
+            }
+            let o: Remove = decode(bytes)?;
+            let _exclusive = app
+                .reserve_export()
+                .map_err(|_| anyhow::anyhow!("Sačekajte da se indeksiranje ili izvoz završi pre uklanjanja medija"))?;
+            let mut s = app.store.lock().unwrap();
+            s.remove_source(&o.id)?;
+            *app.stats_cache.lock().unwrap() = s.stats()?;
+            json!({"ok":true})
         }
         "/api/browse" => browse(&val("path"))?,
         "/api/open" => {

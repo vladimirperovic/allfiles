@@ -1847,3 +1847,33 @@ fn folder_view_reaches_files_imported_with_absolute_paths() -> anyhow::Result<()
     assert!(view(&mut s, "/nope").is_err());
     Ok(())
 }
+#[test]
+fn removing_a_medium_clears_files_names_text_and_stats() -> anyhow::Result<()> {
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    let temp = tempfile::tempdir()?;
+    let data = temp.path().join("data");
+    fs::create_dir(&data)?;
+    let s = Arc::new(Mutex::new(Store::open(&data, "")?));
+    let cancel = AtomicBool::new(false);
+    for (label, word) in [("Prvi", "firstneedle"), ("Drugi", "secondneedle")] {
+        let root = temp.path().join(label);
+        fs::create_dir(&root)?;
+        fs::write(root.join(format!("{label}.txt")), word)?;
+        let o = ScanOptions { root: root.to_string_lossy().into_owned(), label: label.into(), index_content: true, ..Default::default() };
+        crate::scanner::scan(&s, o, &cancel, &|_| {})?;
+    }
+    let first = s.lock().unwrap().sources("", 0, 10)?.0.into_iter().find(|x| x.label == "Prvi").unwrap().id;
+    assert_eq!(s.lock().unwrap().stats()?["files"], 2);
+    s.lock().unwrap().remove_source(&first)?;
+    let mut store = s.lock().unwrap();
+    let stats = store.stats()?;
+    assert_eq!((stats["files"].as_i64(), stats["sources"].as_i64(), stats["documents"].as_i64()), (Some(1), Some(1), Some(1)));
+    let find = |word: &str| SearchOptions { query: word.into(), mode: "all".into(), ..Default::default() };
+    let hits = store.search(find("secondneedle"))?.results;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].name, "Drugi.txt");
+    assert!(store.search(find("firstneedle"))?.results.is_empty());
+    assert!(store.search(SearchOptions { query: "Prvi".into(), ..Default::default() })?.results.is_empty());
+    assert!(store.remove_source(&first).is_err());
+    Ok(())
+}

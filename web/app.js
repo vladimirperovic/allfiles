@@ -323,7 +323,11 @@
       scanButton.addEventListener('click', () => {
         if (imported) { $('#import-label').value = source.label; $('#import-location').value = source.location || ''; openDialog('#import-dialog'); }
         else sourceDialog(source);
-      }); buttons.append(scanButton); card.append(buttons);
+      });
+      const removeButton = element('button', 'button button-ghost', t('Ukloni iz kataloga'));
+      removeButton.disabled = Boolean(demo);
+      removeButton.addEventListener('click', () => removeSource(source));
+      buttons.append(scanButton, removeButton); card.append(buttons);
       cards.append(card);
       nextViews.set(source.id, { key, option, sideButton, card });
     });
@@ -348,6 +352,16 @@
     $('#sidebar-source-search-wrap').hidden = state.sources.length === 0;
     $('#sidebar-no-match').hidden = !(terms.length && state.sources.length && shown === 0);
     updateSourceSelection();
+  }
+  async function removeSource(source) {
+    if (!window.confirm(t('Ukloniti medij „{label}” iz kataloga? Originalni fajlovi se ne brišu, a medij se može ponovo dodati skeniranjem.', { label: source.label }))) return;
+    try {
+      await api('/api/remove', { method: 'POST', body: { id: source.id } });
+      toast(t('Medij je uklonjen iz kataloga.'));
+      await refreshStatus();
+      await loadSources();
+      await runSearch();
+    } catch (error) { toast(t(error.message), true); }
   }
   function renderMediaFilter() {
     const terms = fold($('#media-search').value).trim().split(/\s+/).filter(Boolean);

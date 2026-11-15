@@ -169,6 +169,15 @@ pub struct ScanOptions {
     pub source_id: String,
     pub index_content: bool,
 }
+/// Drop tags, thumbnails and extracted text that no catalogued file refers to any more.
+fn prune_orphans(tx: &rusqlite::Transaction, attached: bool) -> Result<()> {
+    tx.execute("DELETE FROM tags WHERE id NOT IN(SELECT tag_id FROM file_tags)", [])?;
+    if attached {
+        tx.execute("DELETE FROM content.thumbnails WHERE file_id NOT IN(SELECT id FROM files)", [])?;
+        tx.execute_batch("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE text_status NOT IN ('indexed','truncated'));DELETE FROM content.fts WHERE rowid IN(SELECT id FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links));DELETE FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links);")?;
+    }
+    Ok(())
+}
 pub const KINDS: [&str; 5] = ["folder", "computer", "external", "bluray", "lto"];
 #[derive(Clone)]
 pub struct ScannedFile {
@@ -974,17 +983,27 @@ impl Store {
                 params![if complete { "ready" } else { "partial" }, now, source],
             )?;
         }
-        tx.execute(
-            "DELETE FROM tags WHERE id NOT IN(SELECT tag_id FROM file_tags)",
-            [],
-        )?;
-        if attached {
-            tx.execute(
-                "DELETE FROM content.thumbnails WHERE file_id NOT IN(SELECT id FROM files)",
-                [],
-            )?;
-            tx.execute_batch("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE text_status NOT IN ('indexed','truncated'));DELETE FROM content.fts WHERE rowid IN(SELECT id FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links));DELETE FROM content.documents WHERE id NOT IN(SELECT doc_id FROM content.links);")?;
+        prune_orphans(&tx, attached)?;
+        tx.commit()?;
+        Ok(())
+    }
+    /// Remove a medium and everything catalogued for it (names, paths, text, tags). The original files are never touched.
+    pub fn remove_source(&mut self, source: &str) -> Result<()> {
+        self.check()?;
+        self.ensure_content(false)?;
+        let attached = self.attached.get();
+        let tx = self.conn.transaction()?;
+        let known: i64 = tx.query_row("SELECT COUNT(*) FROM sources WHERE id=?", params![source], |r| r.get(0))?;
+        if known == 0 {
+            bail!("Nema tog medija");
         }
+        if attached {
+            tx.execute("DELETE FROM content.links WHERE file_id IN(SELECT id FROM files WHERE source_id=?)", params![source])?;
+        }
+        tx.execute("DELETE FROM files WHERE source_id=?", params![source])?;
+        tx.execute("DELETE FROM directories WHERE source_id=?", params![source])?;
+        tx.execute("DELETE FROM sources WHERE id=?", params![source])?;
+        prune_orphans(&tx, attached)?;
         tx.commit()?;
         Ok(())
     }
