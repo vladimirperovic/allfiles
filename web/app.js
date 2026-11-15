@@ -168,7 +168,8 @@
     databaseBadge.textContent = t('Baza {size}', { size: fmtBytes((Number(status.catalog_bytes) || 0) + (Number(status.content_bytes) || 0)) });
     databaseBadge.title = databaseBreakdown;
     databaseBadge.setAttribute('aria-label', t('Ukupna veličina baze. {details}', { details: databaseBreakdown }));
-    $('#version-label').textContent = t('AllFiles {version} · lokalno', { version: status.version || '' });
+    if (status.exported) { const d = new Date(status.exported * 1000); $('#version-label').textContent = t('Izvoz od {date}', { date: `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}.` }); }
+    else $('#version-label').textContent = t('AllFiles {version} · lokalno', { version: status.version || '' });
     $('#data-dir').textContent = status.data_dir || '—';
     $('#search-eyebrow').textContent = status.demo ? t('DEMO KATALOG · SVE NA SVOM MESTU') : t('SVE NA SVOM MESTU');
     const encryptionLabel = status.encrypted ? t('Baza je šifrovana') : t('Baza nije šifrovana');

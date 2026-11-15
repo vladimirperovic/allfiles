@@ -25,11 +25,11 @@ pub(crate) const LANES: u32 = 4;
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src blob:; form-action 'none'";
 const LOCK: &str = r#"<form id="unlock"><div><h1>AllFiles</h1>
 <p>Šifrovani katalog, samo za čitanje. Sve se dešifruje u ovom pregledaču; ništa se ne šalje i ne upisuje na disk.</p>
-<label class="pick">1. Izaberi folder „data” pored ovog fajla<input id="unlock-folder" type="file" webkitdirectory directory multiple></label>
+<div class="pick"><span>1. Folder „data” pored ovog fajla</span><div class="where"><span id="unlock-where">nije izabran</span><button id="unlock-choose" class="button" type="button">Izaberi…</button></div><input id="unlock-folder" type="file" webkitdirectory directory multiple hidden></div>
 <label>2. Lozinka kataloga<input id="unlock-password" type="password" autocomplete="off" autofocus></label>
 <button id="unlock-go" class="button button-primary" type="submit">Otvori katalog</button>
 <p id="unlock-status" role="status"></p></div></form>"#;
-const UNLOCK_CSS: &str = "#unlock{position:fixed;inset:0;z-index:99;display:grid;place-items:center;padding:16px;background:#14101f;color:#f1ecff}#unlock>div{width:min(440px,100%);display:grid;gap:14px}#unlock h1{margin:0;font-size:28px}#unlock p{margin:0;color:#b9afd6}#unlock label{display:grid;gap:6px}#unlock input{font:inherit;padding:10px;border:1px solid #4a3f6b;border-radius:8px;background:#1d1730;color:inherit}#unlock button{padding:12px;font:inherit;cursor:pointer}#unlock .bad{color:#ff8f7e}body.viewer [data-action=add-source],body.viewer [data-action=export],body.viewer [data-action=shutdown],body.viewer [data-view=index],body.viewer .source-card-buttons,body.viewer .add-source-card{display:none!important}";
+const UNLOCK_CSS: &str = "#unlock{position:fixed;inset:0;z-index:99;display:grid;place-items:center;padding:16px;background:#14101f;color:#f1ecff}#unlock>div{width:min(440px,100%);display:grid;gap:14px}#unlock h1{margin:0;font-size:28px}#unlock p{margin:0;color:#b9afd6}#unlock label{display:grid;gap:6px}#unlock input{font:inherit;padding:10px;border:1px solid #4a3f6b;border-radius:8px;background:#1d1730;color:inherit}#unlock button{padding:12px;font:inherit;cursor:pointer}#unlock .pick{display:grid;gap:6px}#unlock .where{display:flex;align-items:center;gap:10px}#unlock .where span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b9afd6}#unlock .where span.set{color:#f1ecff}#unlock .where button{padding:8px 14px;flex:none}#lock-viewer{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;padding:6px 12px;font-size:12px}#lock-viewer .icon{width:15px;height:15px}#unlock .bad{color:#ff8f7e}body.viewer [data-action=add-source],body.viewer [data-action=export],body.viewer [data-action=shutdown],body.viewer [data-view=index],body.viewer .source-card-buttons,body.viewer .add-source-card{display:none!important}";
 const README: &str = "AllFiles: šifrovan katalog, samo za čitanje.\n\n1. Otvori allfiles.html dvoklikom (Chrome, Edge, Firefox ili Safari).\n2. Izaberi folder „data” pored njega i upiši lozinku kataloga.\n3. Pretražuj fajlove po nazivu i putanji i prelistavaj medije.\n\nSadržaj dokumenata nije u ovom katalogu. Bez lozinke nema oporavka.\n";
 
 fn seal(cipher: &Aes256Gcm, name: &str, source: &Path, target: &Path) -> Result<()> {
@@ -155,7 +155,7 @@ pub fn export(conn: &Connection, destination: &Path, password: &str) -> Result<P
             &partial.join("data").join("catalog.db"),
         )?;
         fs::remove_file(&plain)?;
-        let info = json!({"v":1,"kdf":"argon2id","m":MEMORY_KIB,"t":PASSES,"p":LANES,"salt":B64.encode(salt),"check":B64.encode([nonce.to_vec(), check].concat()),"version":crate::store::VERSION});
+        let info = json!({"v":1,"kdf":"argon2id","m":MEMORY_KIB,"t":PASSES,"p":LANES,"salt":B64.encode(salt),"check":B64.encode([nonce.to_vec(), check].concat()),"version":crate::store::VERSION,"created":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true)});
         fs::write(
             partial.join("data").join("key.json"),
             serde_json::to_vec(&info)?,

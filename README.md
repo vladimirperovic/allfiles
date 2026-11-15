@@ -158,6 +158,12 @@ and paths and open folders. Nothing is installed, sent or written to disk. It is
 use the application for content search, scanning and removal. The format is AES-256-GCM in blocks of up to 4 MiB
 (12-byte nonce, ciphertext, 16-byte tag) with a key from Argon2id (64 MiB, 3 passes, 4 lanes); the additional data binds
 file name, block number and block count. The page has a Content-Security-Policy of `default-src 'none'`.
+
+Chrome and Edge remember the folder you chose (only a reference to the folder in the browser's storage, never the
+password), so next time you only type the password; if the folder is not there (the disc is not inserted) the reader
+asks for it again. You can choose the whole disc and the reader finds `data` itself. Firefox and Safari cannot remember
+a folder and ask every time. The **Lock** button in the top bar wipes the decrypted catalog from memory and returns to
+the password screen (closing the tab does the same). The sidebar shows the date the export was made.
 Bundled: [SQLite WASM](https://sqlite.org/wasm) (Apache-2.0) and [hash-wasm](https://github.com/Daninet/hash-wasm) (MIT).
 
 ## Optional catalog encryption

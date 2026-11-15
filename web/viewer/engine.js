@@ -1,7 +1,7 @@
 // AllFiles reader in the browser (Web Worker). Read-only: decrypts the catalog, opens SQLite in memory and
 // answers the same /api/ calls as the Rust service for sources, status, search, folders and file details.
 const CH = 4194304, OV = 28, enc = new TextEncoder();
-let sqlite3, db, key, files = new Map(), info = {};
+let sqlite3, db, key, files = new Map(), info = {}, exported = null;
 const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const aad = (name, i, n) => enc.encode(`${name}\0${i}\0${n}`);
 const chunks = (file) => Math.max(1, Math.ceil(file.size / (CH + OV)));
@@ -18,10 +18,16 @@ async function decryptInto(name, write, report) {
     report?.((i + parts.length) / n);
   }
 }
-async function open({ password, list }, say) {
-  files = new Map(list);
+async function open({ password, list, dir }, say) {
+  files = new Map(list || []);
+  if (dir) {  // zapamćeni folder: samo ova dva fajla su potrebna
+    for (const name of ["key.json", "catalog.db"]) {
+      try { files.set(name, await (await dir.getFileHandle(name)).getFile()); } catch { /* javlja se ispod */ }
+    }
+  }
   if (!files.has("key.json") || !files.has("catalog.db")) throw new Error("U izabranom folderu nema key.json i catalog.db");
   info = JSON.parse(new TextDecoder().decode(await files.get("key.json").arrayBuffer()));
+  exported = info.created ? Date.parse(info.created) / 1000 : files.get("key.json").lastModified / 1000;  // stariji izvozi nemaju datum: vrijeme fajla
   say("Računam ključ iz lozinke…");
   const raw = await hashwasm.argon2id({ password, salt: b64(info.salt), parallelism: info.p, iterations: info.t, memorySize: info.m, hashLength: 32, outputType: "binary" });
   key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
@@ -76,7 +82,7 @@ function status() {
   const s = q("SELECT files,bytes,documents,sources FROM catalog_stats WHERE id=1")[0];
   return { version: info.version || "", backend: "browser", sqlite_version: sqlite3.capi.sqlite3_libversion(), data_dir: "", demo: false, files: s.files, bytes: s.bytes, documents: 0,
     stored_documents: 0, content_available: false, content_error: "", sources: s.sources, catalog_bytes: files.get("catalog.db").size, content_bytes: 0, fts5: true, encrypted: true,
-    exporting: false, job: null, job_revision: 0, instance_id: "viewer", stats_cached: true };
+    exporting: false, exported, job: null, job_revision: 0, instance_id: "viewer", stats_cached: true };
 }
 function selective(term, g, limit) {
   if (!term.split(/[\[*?]/).some((run) => [...run].length >= 3)) return false;
