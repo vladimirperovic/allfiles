@@ -156,8 +156,8 @@ pub fn import(
                 .map_or(0, |extra| extra.thumbnail_bytes());
             group.entries.push(record.file);
             pending += 1;
-            if group.entries.len() >= scanner::BATCH || pending >= 4096 || pending_bytes >= 32 << 20
-            {
+            // 16384 rows (about 40 s instead of 65 s for 400,000 files at 4096).
+            if pending >= 2 * scanner::BATCH || pending_bytes >= 32 << 20 {
                 flush(store, &mut groups, &mut pending, &mut state, cancel, report)?;
                 pending_bytes = 0;
             }
@@ -1250,9 +1250,12 @@ mod tests {
         fs::create_dir(&data)?;
         let store = Arc::new(Mutex::new(store::Store::open(&data, "")?));
         let source = temp.path().join("catalog.csv");
+        // One import transaction holds 2 * BATCH rows; the input spans a bit more.
+        let flush = 2 * scanner::BATCH;
+        let rows = (flush / 10 + 1) * 10;
         let input = |prefix: &str| {
             let mut csv = String::from("Filename,File Path,Size,Disk\n");
-            for i in 0..4200 {
+            for i in 0..rows {
                 csv.push_str(&format!("{prefix}-{i}.bin,shared,1,Disc {}\n", i % 10));
             }
             csv
@@ -1266,21 +1269,28 @@ mod tests {
         fs::write(&source, input("new"))?;
         let cancel = AtomicBool::new(false);
         let result = import(&store, options.clone(), &cancel, &|progress| {
-            if progress.scanned >= 4096 {
+            if progress.scanned >= flush as i64 {
                 cancel.store(true, Ordering::Relaxed);
             }
         });
         assert!(result.unwrap_err().to_string().contains("Cancelled"));
         // Cancelled work keeps the previous scan and the committed new batch.
-        assert_eq!(store.lock().unwrap().stats()?["files"], 4200 + 4096);
+        assert_eq!(
+            store.lock().unwrap().stats()?["files"],
+            (rows + flush) as i64
+        );
         import(&store, options, &AtomicBool::new(false), &|_| {})?;
         let s = store.lock().unwrap();
         let stats = s.stats()?;
-        assert_eq!(stats["files"], 4200);
-        assert_eq!(stats["bytes"], 4200);
+        assert_eq!(stats["files"], rows as i64);
+        assert_eq!(stats["bytes"], rows as i64);
         let sources = s.all_sources()?;
         assert_eq!(sources.len(), 10);
-        assert!(sources.iter().all(|source| source.file_count == 420));
+        assert!(
+            sources
+                .iter()
+                .all(|source| source.file_count == rows as i64 / 10)
+        );
         let old: i64 = s.conn.query_row(
             "SELECT COUNT(*) FROM files WHERE name LIKE 'old-%'",
             [],

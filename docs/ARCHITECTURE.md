@@ -33,7 +33,7 @@ data/
 
 The content database is optional until needed. File records refer to source media and directories; content links bind a file version to an extracted document. Shared extracted text can use a shared document row. This storage optimization is not original-file duplicate detection.
 
-Name/path lookup uses normalized fields and trigram indexes, with an ordered scan for short or common terms. Content lookup uses FTS5 `unicode61 remove_diacritics 2`; snippet matching uses that same tokenizer. Preview and MCP text pages count Unicode characters while enforcing byte limits on stored/decompressed text.
+Name/path lookup uses normalized fields and trigram indexes, with the matching ids collected from the name index for short or common terms, and an ordered scan when most names match or a medium, type or tag filter applies. Content lookup uses FTS5 `unicode61 remove_diacritics 2`; snippet matching uses that same tokenizer. Preview and MCP text pages count Unicode characters while enforcing byte limits on stored/decompressed text.
 
 Transactional counters avoid resumming all files on every status poll. Connection-local availability tables/triggers describe which persisted content links are currently usable. When a content database is missing, mismatched or incomplete, metadata remains searchable and the response reports available content separately from stored extraction metadata. Opening an incomplete copy does not erase persisted extraction status.
 

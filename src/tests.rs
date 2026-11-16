@@ -563,7 +563,18 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
     s.finish_scan(&src.id, "scan", true)?;
     // "drawing" exceeds the trigram threshold, "dr" is too short for trigrams,
     // "needle" and "0003" are selective; all must match an independent query.
-    for query in ["drawing", "dr", "needle", "plan 0003", "dir draw", "zzz"] {
+    // "dir" and "ir" match only folder paths (the id-set form); "dr" and
+    // "drawing" match most names (the ordered-scan form).
+    for query in [
+        "drawing",
+        "dr",
+        "dir",
+        "ir",
+        "needle",
+        "plan 0003",
+        "dir draw",
+        "zzz",
+    ] {
         let mut sql =
             "SELECT f.id FROM files f JOIN directories d ON d.id=f.dir_id WHERE 1=1".to_owned();
         let terms = query.split_whitespace().collect::<Vec<_>>();
@@ -594,6 +605,25 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
                 "{query} @{offset}"
             );
         }
+    }
+    // A filter switches broad terms to the ordered scan; the matches stay equal.
+    for query in ["dir", "dr"] {
+        let all = s.search(SearchOptions {
+            query: query.into(),
+            ..Default::default()
+        })?;
+        let filtered = s.search(SearchOptions {
+            query: query.into(),
+            extension: "txt".into(),
+            ..Default::default()
+        })?;
+        assert_eq!(all.total, filtered.total, "{query}");
+        assert!(
+            all.results
+                .iter()
+                .map(|f| f.id)
+                .eq(filtered.results.iter().map(|f| f.id))
+        );
     }
     let blank = s.search(SearchOptions {
         offset: 1490,

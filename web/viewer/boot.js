@@ -2,8 +2,10 @@
 (() => {
   const $ = (s) => document.querySelector(s);
   const SRC = JSON.parse($("#viewer-src").textContent);
+  $("#viewer-src").remove();  // the parsed copy is enough; do not keep ~2 MB of text in the page
   const run = (code) => { const s = document.createElement("script"); s.textContent = code; document.head.append(s); s.remove(); };
   const worker = new Worker(URL.createObjectURL(new Blob([SRC.worker], { type: "text/javascript" })));
+  delete SRC.worker;
   const waiting = new Map();
   let seq = 0, onProgress = () => {};
   worker.onmessage = ({ data }) => {

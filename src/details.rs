@@ -16,7 +16,7 @@ pub const MAX_THUMBNAIL: usize = 512 * 1024;
 const MAX_TEXT: usize = 4096;
 const MAX_TAGS: usize = 256;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Exif {
     pub camera: String,
     pub lens: String,
@@ -32,21 +32,11 @@ pub struct Exif {
 }
 impl Exif {
     fn is_empty(&self) -> bool {
-        self.camera.is_empty()
-            && self.lens.is_empty()
-            && self.width.is_none()
-            && self.height.is_none()
-            && self.taken.is_empty()
-            && self.iso.is_empty()
-            && self.exposure.is_empty()
-            && self.aperture.is_empty()
-            && self.focal_length.is_empty()
-            && self.flash.is_empty()
-            && self.gps.is_empty()
+        *self == Self::default()
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct Audio {
     pub artist: String,
     pub album: String,
@@ -61,20 +51,11 @@ pub struct Audio {
 }
 impl Audio {
     fn is_empty(&self) -> bool {
-        self.artist.is_empty()
-            && self.album.is_empty()
-            && self.year.is_empty()
-            && self.track.is_none()
-            && self.genre.is_empty()
-            && self.title.is_empty()
-            && self.duration.is_none()
-            && self.bitrate.is_none()
-            && self.channels.is_none()
-            && self.sample_rate.is_none()
+        *self == Self::default()
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Thumbnail {
     pub mime: &'static str,
     pub data: Vec<u8>,
@@ -97,7 +78,7 @@ impl Thumbnail {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct FileExtra {
     pub crc32: String,
     /// Source scale 1–100; shown as up to five stars.
@@ -110,13 +91,7 @@ pub struct FileExtra {
 }
 impl FileExtra {
     pub fn is_empty(&self) -> bool {
-        self.crc32.is_empty()
-            && self.rating.is_none()
-            && self.comment.is_empty()
-            && self.tags.is_empty()
-            && self.exif.is_empty()
-            && self.audio.is_empty()
-            && self.thumbnail.is_none()
+        *self == Self::default()
     }
     pub fn thumbnail_bytes(&self) -> usize {
         self.thumbnail.as_ref().map_or(0, |t| t.data.len())

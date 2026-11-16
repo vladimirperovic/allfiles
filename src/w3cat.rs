@@ -437,7 +437,7 @@ impl<'a> Extras<'a> {
                 .optional()?
             // Old tools leave raw control characters inside JSON strings.
             && let Ok(serde_json::Value::Object(fields)) =
-                serde_json::from_str(&clean_json(&json))
+                serde_json::from_str(&clean(&json))
         {
             let field = |key: &str| {
                 fields
@@ -492,12 +492,6 @@ impl<'a> Extras<'a> {
         }
         Ok(extra)
     }
-}
-fn clean_json(value: &str) -> String {
-    value
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .collect()
 }
 
 /// WinCatalog stores most dates as `YYYY-MM-DD HH:MM:SS` but some as
