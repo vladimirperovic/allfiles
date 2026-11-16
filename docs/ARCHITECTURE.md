@@ -33,7 +33,7 @@ data/
 
 The content database is optional until needed. File records refer to source media and directories; content links bind a file version to an extracted document. Shared extracted text can use a shared document row. This storage optimization is not original-file duplicate detection.
 
-Name/path lookup uses normalized fields and trigram indexes, with the matching ids collected from the name index for short or common terms, and an ordered scan when most names match or a medium, type or tag filter applies. Content lookup uses FTS5 `unicode61 remove_diacritics 2`; snippet matching uses that same tokenizer. Preview and MCP text pages count Unicode characters while enforcing byte limits on stored/decompressed text.
+Name/path lookup uses normalized fields and trigram indexes, with short or common terms answered from the name, size or date index in the requested order (folder matches as a set of file ids) unless a selective term or a medium, type or tag filter already narrows the rows. Content lookup uses FTS5 `unicode61 remove_diacritics 2`; snippet matching uses that same tokenizer. Preview and MCP text pages count Unicode characters while enforcing byte limits on stored/decompressed text.
 
 Transactional counters avoid resumming all files on every status poll. Connection-local availability tables/triggers describe which persisted content links are currently usable. When a content database is missing, mismatched or incomplete, metadata remains searchable and the response reports available content separately from stored extraction metadata. Opening an incomplete copy does not erase persisted extraction status.
 
@@ -41,7 +41,7 @@ One process owns a catalog directory. SQLite uses rollback journals, `synchronou
 
 ## Work, requests and cancellation
 
-The shared store is serialized by a mutex. Filesystem traversal and text extraction happen outside that lock where possible; updates use bounded batches. Up to four worker threads extract document text in parallel (one for `bluray` and `lto` media); the scan thread reports progress and records their results in bounded groups. Cancellation stops workers from taking new files. Scan/import jobs publish progress independently. Cancelling preserves committed work and avoids final stale-file cleanup for an incomplete scan.
+The shared store is serialized by a mutex. Filesystem traversal and text extraction happen outside that lock where possible; updates use bounded batches whose size follows how long the previous one held the store. Up to four worker threads extract document text in parallel (one for `bluray` and `lto` media); the scan thread reports progress and records their results in bounded groups. Cancellation stops workers from taking new files. Scan/import jobs publish progress independently. Cancelling preserves committed work and avoids final stale-file cleanup for an incomplete scan.
 
 `/api/status` carries an `instance_id` and monotonic `job_revision`. Accepted jobs return their initial job and revision together. The interface uses these values and local request epochs to reject late responses, identify restarts and avoid reconnecting after intentional shutdown.
 

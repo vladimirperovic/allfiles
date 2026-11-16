@@ -544,7 +544,7 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
         root: "demo://hybrid".into(),
         ..Default::default()
     })?;
-    let entries = (0..1500)
+    let entries = (0..1500i64)
         .map(|i| {
             let name = format!("{} {i:04}.txt", if i % 3 == 0 { "Plan" } else { "Drawing" });
             let dir = if i % 500 == 0 {
@@ -552,9 +552,14 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
             } else {
                 format!("Dir {}", i % 7)
             };
+            let modified = 1_700_000_000 + (i * 53 % 97);
             ScannedFile {
                 relative: format!("{dir}/{name}"),
                 dir,
+                extension: if i % 5 == 0 { "bin" } else { "txt" }.into(),
+                size: i * 37 % 101,
+                modified,
+                modified_ns: modified * 1_000_000_000,
                 ..entry(&name)
             }
         })
@@ -562,9 +567,10 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
     s.upsert(&src.id, "scan", &entries)?;
     s.finish_scan(&src.id, "scan", true)?;
     // "drawing" exceeds the trigram threshold, "dr" is too short for trigrams,
-    // "needle" and "0003" are selective; all must match an independent query.
-    // "dir" and "ir" match only folder paths (the id-set form); "dr" and
-    // "drawing" match most names (the ordered-scan form).
+    // "needle" and "0003" are selective; "dir" and "ir" match only folder paths.
+    // Alone, a broad term is answered from indexes (by name order, or as an id
+    // set for the other orders); next to a selective term or a filter it tests
+    // the remaining rows. Every combination must match an independent query.
     for query in [
         "drawing",
         "dr",
@@ -573,57 +579,55 @@ fn hybrid_search_paths_agree_with_plain_sql() -> anyhow::Result<()> {
         "needle",
         "plan 0003",
         "dir draw",
+        "dr ir",
+        "needle dr",
+        "0003 dir dr",
         "zzz",
     ] {
-        let mut sql =
-            "SELECT f.id FROM files f JOIN directories d ON d.id=f.dir_id WHERE 1=1".to_owned();
         let terms = query.split_whitespace().collect::<Vec<_>>();
-        for _ in &terms {
-            sql.push_str(" AND (f.search_name GLOB ? OR d.search_path GLOB ?)");
-        }
         let args = terms
             .iter()
             .flat_map(|t| [format!("*{t}*"), format!("*{t}*")])
             .collect::<Vec<_>>();
-        sql.push_str(" ORDER BY f.search_name,f.id");
-        let expected = s
-            .conn
-            .prepare(&sql)?
-            .query_map(rusqlite::params_from_iter(&args), |r| r.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        for offset in [0, 7, 990] {
-            let found = s.search(SearchOptions {
-                query: query.into(),
-                offset,
-                limit: 25,
-                ..Default::default()
-            })?;
-            assert_eq!(found.total, expected.len() as i64, "{query}");
-            let page = expected.iter().skip(offset as usize).take(25).copied();
-            assert!(
-                found.results.iter().map(|f| f.id).eq(page),
-                "{query} @{offset}"
-            );
+        for (sort, order) in [
+            ("", "f.search_name,f.id"),
+            ("size", "f.size DESC,f.id"),
+            ("modified", "f.modified DESC,f.id"),
+        ] {
+            for extension in ["", "txt", "bin"] {
+                let mut sql = "SELECT f.id FROM files f JOIN directories d ON d.id=f.dir_id WHERE f.extension LIKE ?"
+                    .to_owned();
+                for _ in &terms {
+                    sql.push_str(" AND (f.search_name GLOB ? OR d.search_path GLOB ?)");
+                }
+                sql.push_str(&format!(" ORDER BY {order}"));
+                let like = if extension.is_empty() { "%" } else { extension };
+                let expected = s
+                    .conn
+                    .prepare(&sql)?
+                    .query_map(
+                        rusqlite::params_from_iter(
+                            std::iter::once(like.to_owned()).chain(args.iter().cloned()),
+                        ),
+                        |r| r.get::<_, i64>(0),
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for offset in [0, 7, 990] {
+                    let found = s.search(SearchOptions {
+                        query: query.into(),
+                        sort: sort.into(),
+                        extension: extension.into(),
+                        offset,
+                        limit: 25,
+                        ..Default::default()
+                    })?;
+                    let case = format!("{query} sort={sort} ext={extension} @{offset}");
+                    assert_eq!(found.total, expected.len() as i64, "{case}");
+                    let page = expected.iter().skip(offset as usize).take(25).copied();
+                    assert!(found.results.iter().map(|f| f.id).eq(page), "{case}");
+                }
+            }
         }
-    }
-    // A filter switches broad terms to the ordered scan; the matches stay equal.
-    for query in ["dir", "dr"] {
-        let all = s.search(SearchOptions {
-            query: query.into(),
-            ..Default::default()
-        })?;
-        let filtered = s.search(SearchOptions {
-            query: query.into(),
-            extension: "txt".into(),
-            ..Default::default()
-        })?;
-        assert_eq!(all.total, filtered.total, "{query}");
-        assert!(
-            all.results
-                .iter()
-                .map(|f| f.id)
-                .eq(filtered.results.iter().map(|f| f.id))
-        );
     }
     let blank = s.search(SearchOptions {
         offset: 1490,

@@ -103,6 +103,7 @@ pub fn import(
     // Thumbnails make records far larger than names, so memory is also bounded
     // by bytes: a batch is written once it holds this many thumbnail bytes.
     let mut pending_bytes = 0usize;
+    let mut pace = scanner::Pace::new(2 * scanner::BATCH);
     state.phase = "importing".into();
     report(state.clone());
     let result = (|| -> Result<()> {
@@ -156,14 +157,30 @@ pub fn import(
                 .map_or(0, |extra| extra.thumbnail_bytes());
             group.entries.push(record.file);
             pending += 1;
-            // 16384 rows (about 40 s instead of 65 s for 400,000 files at 4096).
-            if pending >= 2 * scanner::BATCH || pending_bytes >= 32 << 20 {
-                flush(store, &mut groups, &mut pending, &mut state, cancel, report)?;
+            // Up to 16384 rows (about 40 s instead of 65 s for 400,000 files at 4096).
+            if pending >= pace.rows() || pending_bytes >= 32 << 20 {
+                flush(
+                    store,
+                    &mut groups,
+                    &mut pending,
+                    &mut state,
+                    &mut pace,
+                    cancel,
+                    report,
+                )?;
                 pending_bytes = 0;
             }
             Ok(())
         })?;
-        flush(store, &mut groups, &mut pending, &mut state, cancel, report)?;
+        flush(
+            store,
+            &mut groups,
+            &mut pending,
+            &mut state,
+            &mut pace,
+            cancel,
+            report,
+        )?;
         scanner::check(cancel)?;
         unchanged(&path, &before)?;
         Ok(())
@@ -190,6 +207,7 @@ fn flush(
     groups: &mut HashMap<String, Batch>,
     pending: &mut usize,
     state: &mut Progress,
+    pace: &mut scanner::Pace,
     cancel: &AtomicBool,
     report: &dyn Fn(Progress),
 ) -> Result<()> {
@@ -204,7 +222,13 @@ fn flush(
         .filter(|group| !group.entries.is_empty())
         .map(|group| (group.source.id.as_str(), group.entries.as_slice()))
         .collect::<Vec<_>>();
-    store.lock().unwrap().upsert_groups(&state.id, &batch)?;
+    let held = {
+        let mut store = store.lock().unwrap();
+        let started = std::time::Instant::now();
+        store.upsert_groups(&state.id, &batch)?;
+        started.elapsed()
+    };
+    pace.held(held);
     state.scanned += *pending as i64;
     *pending = 0;
     for group in groups.values_mut() {
@@ -1250,9 +1274,8 @@ mod tests {
         fs::create_dir(&data)?;
         let store = Arc::new(Mutex::new(store::Store::open(&data, "")?));
         let source = temp.path().join("catalog.csv");
-        // One import transaction holds 2 * BATCH rows; the input spans a bit more.
-        let flush = 2 * scanner::BATCH;
-        let rows = (flush / 10 + 1) * 10;
+        // More rows than the largest import transaction, so several are written.
+        let rows = (2 * scanner::BATCH / 10 + 1) * 10;
         let input = |prefix: &str| {
             let mut csv = String::from("Filename,File Path,Size,Disk\n");
             for i in 0..rows {
@@ -1268,16 +1291,18 @@ mod tests {
         import(&store, options.clone(), &AtomicBool::new(false), &|_| {})?;
         fs::write(&source, input("new"))?;
         let cancel = AtomicBool::new(false);
+        let committed = Cell::new(0);
         let result = import(&store, options.clone(), &cancel, &|progress| {
-            if progress.scanned >= flush as i64 {
-                cancel.store(true, Ordering::Relaxed);
+            if progress.scanned > 0 && !cancel.swap(true, Ordering::Relaxed) {
+                committed.set(progress.scanned);
             }
         });
         assert!(result.unwrap_err().to_string().contains("Cancelled"));
+        assert!(committed.get() > 0 && committed.get() < rows as i64);
         // Cancelled work keeps the previous scan and the committed new batch.
         assert_eq!(
             store.lock().unwrap().stats()?["files"],
-            (rows + flush) as i64
+            rows as i64 + committed.get()
         );
         import(&store, options, &AtomicBool::new(false), &|_| {})?;
         let s = store.lock().unwrap();

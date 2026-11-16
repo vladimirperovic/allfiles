@@ -1071,21 +1071,43 @@ impl Store {
         };
         let mut distinct = HashSet::new();
         terms.retain(|term| distinct.insert(term.clone()));
-        let filtered = !o.source.is_empty() || !o.extension.is_empty() || !o.tag.is_empty();
-        let files: i64 = if terms.is_empty() {
+        // Trigram lookups are fast for selective terms, but a broad term makes
+        // SQLite verify nearly every candidate, so each term is probed first.
+        let threshold = if terms.is_empty() {
             0
         } else {
-            self.conn
-                .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
-                    r.get(0)
-                })?
+            let files: i64 =
+                self.conn
+                    .query_row("SELECT files FROM catalog_stats WHERE id=1", [], |r| {
+                        r.get(0)
+                    })?;
+            (files / 16).clamp(1000, 50_000)
         };
+        let mut selective = Vec::with_capacity(terms.len());
         for term in &terms {
             check_operation(should_cancel)?;
             let g = format!("*{}*", glob_literal(term));
-            names.push(self.name_plan(term, &g, files, filtered)?);
+            selective.push(self.selective(term, &g, threshold)?);
             name_args.push(g.clone().into());
             name_args.push(g.into());
+        }
+        // Something else narrows the rows (a selective term, or a medium, type or
+        // tag filter): broad terms then only test the few rows that remain.
+        let narrowed = selective.contains(&true)
+            || !o.source.is_empty()
+            || !o.extension.is_empty()
+            || !o.tag.is_empty();
+        let by_name = !matches!(o.sort.as_str(), "size" | "modified");
+        for &selective in &selective {
+            names.push(if selective {
+                Self::BY_INDEX
+            } else if narrowed {
+                Self::BY_ROW
+            } else if by_name {
+                Self::BY_NAME
+            } else {
+                Self::BY_SET
+            });
         }
         let name_sql = if names.is_empty() {
             "1=1".into()
@@ -1252,46 +1274,23 @@ impl Store {
             limit: o.limit,
         })
     }
-    // How one term is matched against file names and folder paths; the three
+    // How one term is matched against file names and folder paths. The three
     // forms select the same files and differ only in cost.
     // Few trigram candidates: ask the FTS indexes.
     const BY_INDEX: &str = "f.id IN(SELECT rowid FROM names WHERE search_name GLOB ? UNION SELECT pf.id FROM files pf WHERE pf.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))";
-    // Fewer than half of all names match: collect the matching ids once from the
-    // name index alone and sort only those. Testing dir_id in an OR for every row
-    // instead reads each row from the table (about 1 s per 400,000 files).
-    const BY_SET: &str = "f.id IN(SELECT id FROM files INDEXED BY files_name WHERE search_name GLOB ? UNION ALL SELECT id FROM files WHERE dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))";
-    // Most names match: the ordered scan finds them anyway and sorts nothing.
-    const BY_SCAN: &str =
+    // Broad term, rows already narrowed: test each remaining row.
+    const BY_ROW: &str =
         "(f.search_name GLOB ? OR f.dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))";
-    fn name_plan(
-        &self,
-        term: &str,
-        glob: &str,
-        files: i64,
-        filtered: bool,
-    ) -> Result<&'static str> {
-        // Trigram lookups are fast for selective terms, but a broad term makes
-        // SQLite verify nearly every candidate.
-        if self.selective(term, glob, (files / 16).clamp(1000, 50_000))? {
-            return Ok(Self::BY_INDEX);
-        }
-        // A source, extension or tag filter already narrows the scan through its
-        // own index, which collecting every matching id would not use.
-        if filtered {
-            return Ok(Self::BY_SCAN);
-        }
-        let half = (files / 2).max(1000);
-        let matching: i64 = self.conn.query_row(
-            "SELECT count(*) FROM (SELECT 1 FROM files WHERE search_name GLOB ? LIMIT ?)",
-            params![glob, half],
-            |r| r.get(0),
-        )?;
-        Ok(if matching < half {
-            Self::BY_SET
-        } else {
-            Self::BY_SCAN
-        })
-    }
+    // Broad term over the whole catalog, results in name order: the name index
+    // is walked in that order and holds the name itself, so only folder matches
+    // need a set of ids. BY_ROW would read every row from the table to learn its
+    // folder (about 1 s per 400,000 files); here no table row is read.
+    const BY_NAME: &str = "(f.search_name GLOB ? OR f.id IN(SELECT id FROM files WHERE dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?)))";
+    // The same for size or date order, whose indexes do not hold the name: all
+    // matching ids are collected first. The unary plus keeps SQLite from looking
+    // each id up and sorting the rows; it walks the index of the requested order
+    // and only asks whether an id is in the set.
+    const BY_SET: &str = "+f.id IN(SELECT id FROM files INDEXED BY files_name WHERE search_name GLOB ? UNION ALL SELECT id FROM files WHERE dir_id IN(SELECT rowid FROM paths WHERE search_path GLOB ?))";
     // True when a term's trigram candidates stay below `limit`. Terms without
     // three literal characters cannot use the trigram index and always scan.
     fn selective(&self, term: &str, glob: &str, limit: i64) -> Result<bool> {

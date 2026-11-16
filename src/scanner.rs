@@ -14,12 +14,37 @@ use std::{
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-// Rows per catalog transaction while walking (imports use twice as many). Every
-// commit syncs a rollback journal that holds each page the batch touched, and
-// rows land on scattered index pages, so larger batches write far less in total:
-// a 120,000-file scan took ~15 s at 2048 rows and ~6 s at 8192. A batch still
-// holds the store lock only for a moment.
+// Most rows of one catalog transaction while walking (imports use twice as
+// many). Every commit syncs a rollback journal that holds each page the batch
+// touched, and rows land on scattered index pages, so larger batches write far
+// less in total: a 120,000-file scan took ~15 s at 2048 rows and ~6 s at 8192.
 pub const BATCH: usize = 8192;
+/// Rows for the next transaction. A batch holds the store, and searches wait
+/// for it, so the size follows the catalog's disk: it starts at a quarter of
+/// the most, doubles while a batch takes under two seconds, and halves after
+/// one that took more than five (a slow USB disk, a very large catalog).
+pub struct Pace {
+    rows: usize,
+    most: usize,
+}
+impl Pace {
+    pub fn new(most: usize) -> Self {
+        Self {
+            rows: most / 4,
+            most,
+        }
+    }
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+    pub fn held(&mut self, time: Duration) {
+        if time > Duration::from_secs(5) {
+            self.rows = (self.rows / 2).max(self.most / 16);
+        } else if time < Duration::from_secs(2) {
+            self.rows = (self.rows * 2).min(self.most);
+        }
+    }
+}
 const COMMIT_INTERVAL: Duration = Duration::from_secs(2);
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Progress {
@@ -89,6 +114,10 @@ pub fn scan(
     report(state.clone());
     let result = (|| -> Result<()> {
         let mut batch = Vec::with_capacity(BATCH);
+        let mut pace = Pace::new(BATCH);
+        // Also written every few seconds, so a slow medium shows progress and a
+        // cancelled scan keeps what it has walked.
+        let mut flushed = Instant::now();
         let mut errors = Vec::new();
         for entry in walkdir::WalkDir::new(&root)
             .follow_links(false)
@@ -152,18 +181,20 @@ pub fn scan(
                 extra: None,
             });
             state.current = relative;
-            if batch.len() == BATCH {
+            if batch.len() >= pace.rows() || flushed.elapsed() >= COMMIT_INTERVAL {
                 flush(
                     store,
                     &source.id,
                     &root,
                     &mut batch,
                     &mut state,
+                    &mut pace,
                     options.index_content,
                     workers,
                     cancel,
                     report,
                 )?;
+                flushed = Instant::now();
             }
         }
         flush(
@@ -172,6 +203,7 @@ pub fn scan(
             &root,
             &mut batch,
             &mut state,
+            &mut pace,
             options.index_content,
             workers,
             cancel,
@@ -232,6 +264,7 @@ fn flush(
     root: &Path,
     batch: &mut Vec<ScannedFile>,
     state: &mut Progress,
+    pace: &mut Pace,
     index_content: bool,
     workers: usize,
     cancel: &AtomicBool,
@@ -241,7 +274,12 @@ fn flush(
         return Ok(());
     }
     check(cancel)?;
-    let indexed = store.lock().unwrap().upsert(source, &state.id, batch)?;
+    let (indexed, held) = {
+        let mut store = store.lock().unwrap();
+        let started = Instant::now();
+        (store.upsert(source, &state.id, batch)?, started.elapsed())
+    };
+    pace.held(held);
     state.scanned += batch.len() as i64;
     batch.clear();
     if index_content {
@@ -333,6 +371,24 @@ fn record(store: &SharedStore, pending: &mut Vec<(IndexedFile, extract::Extracte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_size_follows_how_long_the_store_was_held() {
+        let mut pace = Pace::new(8192);
+        assert_eq!(pace.rows(), 2048);
+        pace.held(Duration::from_millis(300));
+        pace.held(Duration::from_millis(1900));
+        pace.held(Duration::from_millis(10));
+        assert_eq!(pace.rows(), 8192, "quick batches grow to the most only");
+        pace.held(Duration::from_secs(3));
+        assert_eq!(pace.rows(), 8192, "between the two limits the size stays");
+        for _ in 0..10 {
+            pace.held(Duration::from_secs(6));
+        }
+        assert_eq!(pace.rows(), 512, "slow batches shrink to a floor");
+        pace.held(Duration::from_secs(1));
+        assert_eq!(pace.rows(), 1024);
+    }
 
     #[test]
     fn timestamps_cover_filesystem_dates_and_preserve_version_precision() -> Result<()> {
