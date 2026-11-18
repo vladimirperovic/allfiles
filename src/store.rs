@@ -291,7 +291,7 @@ fn open_connection(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<Connection
     conn.execute_batch("PRAGMA temp_store=MEMORY;PRAGMA trusted_schema=ON;PRAGMA mmap_size=0;PRAGMA cache_size=-65536;")?;
     Ok(conn)
 }
-fn uri(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<String> {
+pub(crate) fn uri(path: &Path, vfs: Option<&EncryptedVfs>) -> Result<String> {
     let mut url =
         url::Url::from_file_path(path).map_err(|_| anyhow::anyhow!("Invalid database path"))?;
     if let Some(v) = vfs {
@@ -674,6 +674,24 @@ impl Store {
         }
         Ok(out)
     }
+    /// Adopt the former label-based source on its first WinCatalog reimport.
+    /// Once claimed it has a volume root, so a namesake cannot claim it too.
+    pub fn imported_volume_id(
+        &self,
+        root: &str,
+        old_root: &str,
+        label: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id FROM sources WHERE root=?1 OR (root=?2 AND label=?3)
+             ORDER BY (root=?1) DESC LIMIT 1",
+                params![root, old_root, label],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
     pub fn begin_scan(&mut self, o: &ScanOptions) -> Result<Source> {
         self.check()?;
         if !o.kind.is_empty() && !KINDS.contains(&o.kind.as_str()) {
@@ -783,12 +801,10 @@ impl Store {
                 // have exactly the same relative folder and filename.
                 let mut dirs = HashMap::new();
                 for f in entries {
-                    let dir = if f.dir == "." {
-                        String::new()
-                    } else {
-                        f.dir.replace('\\', "/")
-                    };
-                    let did = if let Some(d) = dirs.get(&dir) {
+                    // Scanners and importers already delimit components with '/'.
+                    // A backslash inside a Unix filename is part of its name.
+                    let dir = if f.dir == "." { "" } else { f.dir.as_str() };
+                    let did = if let Some(d) = dirs.get(dir) {
                         *d
                     } else {
                         let d = match find_dir
@@ -797,7 +813,7 @@ impl Store {
                         {
                             Some(d) => d,
                             None => {
-                                add_dir.execute(params![source, dir, fold(&dir)])?;
+                                add_dir.execute(params![source, dir, fold(dir)])?;
                                 tx.last_insert_rowid()
                             }
                         };
@@ -1391,7 +1407,7 @@ impl Store {
         let start = Instant::now();
         check_operation(should_cancel)?;
         self.check()?;
-        let requested = path.replace('\\', "/");
+        let requested = path;
         if requested.contains('\0') || requested.len() > 32768 {
             bail!("Invalid folder path");
         }
@@ -1410,11 +1426,20 @@ impl Store {
         // Their leading slashes belong to the first folder name, which is
         // listed at the root of the medium; "/" alone holds the files stored
         // directly there.
-        let mut path = match requested.trim_end_matches('/') {
-            "" if !requested.is_empty() => "/",
-            trimmed => trimmed,
-        };
+        fn trim_path(path: &str) -> &str {
+            match path.trim_end_matches('/') {
+                "" if !path.is_empty() => "/",
+                trimmed => trimmed,
+            }
+        }
+        let mut path = trim_path(requested);
         let mut level = self.folder_level(source, path, should_cancel)?;
+        let normalized;
+        if level.is_empty() && requested.contains('\\') {
+            normalized = requested.replace('\\', "/");
+            path = trim_path(&normalized);
+            level = self.folder_level(source, path, should_cancel)?;
+        }
         if level.is_empty() && path.starts_with('/') {
             // A stray leading separator before an ordinary relative folder.
             path = path.trim_start_matches('/');
@@ -1639,14 +1664,14 @@ impl FolderLevel {
         self.folders.is_empty() && self.total_files == 0
     }
 }
-struct ExportCleanup {
+pub(crate) struct ExportCleanup {
     dir: PathBuf,
     identity: same_file::Handle,
     files: Vec<(PathBuf, same_file::Handle)>,
-    complete: bool,
+    pub(crate) complete: bool,
 }
 impl ExportCleanup {
-    fn new(dir: &Path) -> Result<Self> {
+    pub(crate) fn new(dir: &Path) -> Result<Self> {
         Ok(Self {
             dir: dir.into(),
             identity: same_file::Handle::from_path(dir)?,
@@ -1654,11 +1679,15 @@ impl ExportCleanup {
             complete: false,
         })
     }
-    fn create(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+    pub(crate) fn create_file(&mut self, name: &str) -> Result<File> {
         let path = self.dir.join(name);
-        let mut file = private_file(&path)?;
+        let file = private_file(&path)?;
         self.files
             .push((path, same_file::Handle::from_file(file.try_clone()?)?));
+        Ok(file)
+    }
+    pub(crate) fn create(&mut self, name: &str, bytes: &[u8]) -> Result<()> {
+        let mut file = self.create_file(name)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         Ok(())
@@ -1684,7 +1713,10 @@ impl Drop for ExportCleanup {
         }
         if let Ok(entries) = fs::read_dir(&self.dir) {
             let entries = entries.filter_map(|e| e.ok()).collect::<Vec<_>>();
-            if entries.len() == 1 && entries[0].file_name() == ".allfiles-export-incomplete" {
+            if entries.is_empty() {
+                let _ = fs::remove_dir(&self.dir);
+            } else if entries.len() == 1 && entries[0].file_name() == ".allfiles-export-incomplete"
+            {
                 let path = entries[0].path();
                 if self.files.iter().any(|(p, id)| {
                     *p == path && same_file::Handle::from_path(&path).ok().as_ref() == Some(id)

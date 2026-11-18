@@ -4,17 +4,37 @@
   const SRC = JSON.parse($("#viewer-src").textContent);
   $("#viewer-src").remove();  // the parsed copy is enough; do not keep ~2 MB of text in the page
   const run = (code) => { const s = document.createElement("script"); s.textContent = code; document.head.append(s); s.remove(); };
-  const worker = new Worker(URL.createObjectURL(new Blob([SRC.worker], { type: "text/javascript" })));
+  const workerURL = URL.createObjectURL(new Blob([SRC.worker], { type: "text/javascript" }));
   delete SRC.worker;
   const waiting = new Map();
-  let seq = 0, onProgress = () => {};
-  worker.onmessage = ({ data }) => {
-    if (data.progress) return onProgress(data.progress);
-    const done = waiting.get(data.id);
-    waiting.delete(data.id);
-    done(data);
+  let worker, seq = 0, onProgress = () => {};
+  const stopWorker = (error = "Čitač je zaustavljen.") => {
+    worker?.terminate();
+    worker = null;
+    for (const resolve of waiting.values()) resolve({ error, status: 503 });
+    waiting.clear();
   };
-  const call = (msg) => new Promise((resolve) => { const id = ++seq; waiting.set(id, resolve); worker.postMessage({ id, ...msg }); });
+  const call = (msg) => new Promise((resolve) => {
+    const id = ++seq;
+    try {
+      if (msg.t === "open") {
+        worker = new Worker(workerURL);
+        worker.onmessage = ({ data }) => {
+          if (data.progress) return onProgress(data.progress);
+          waiting.get(data.id)?.(data);
+          waiting.delete(data.id);
+        };
+        worker.onerror = () => stopWorker("Čitač nije mogao da nastavi rad. Ponovo otvorite katalog.");
+        worker.onmessageerror = worker.onerror;
+      }
+      if (!worker) return resolve({ error: "Čitač je zaustavljen.", status: 503 });
+      waiting.set(id, resolve);
+      worker.postMessage({ id, ...msg });
+    } catch (error) {
+      waiting.delete(id);
+      resolve({ error: error.message, status: 503 });
+    }
+  });
   const realFetch = window.fetch.bind(window);
   window.fetch = async (url, opts = {}) => {
     if (typeof url !== "string" || !url.startsWith("/api/")) return realFetch(url, opts);
@@ -24,10 +44,13 @@
   };
 
   // Zaključavanje: radnik sa dešifrovanim katalogom se gasi i stranica se učitava iznova.
-  const lock = () => { worker.terminate(); history.replaceState(null, "", location.pathname); location.reload(); };
+  const lock = () => { stopWorker(); location.reload(); };
 
   // Ekran za lozinku. Chrome i Edge pamte izabrani folder (handle u IndexedDB-u, nikad lozinku): sljedeći put treba samo lozinka.
   const form = $("#unlock"), status = $("#unlock-status"), pick = $("#unlock-folder"), pass = $("#unlock-password"), go = $("#unlock-go");
+  const dialog = $("#viewer-lock");
+  dialog.addEventListener("cancel", (event) => event.preventDefault());
+  dialog.showModal();
   const choose = $("#unlock-choose"), where = $("#unlock-where");
   const say = (text, bad) => { status.textContent = text; status.className = bad ? "bad" : ""; };
   const READ = { mode: "read" }, HANDLES = typeof window.showDirectoryPicker === "function";
@@ -37,9 +60,13 @@
       open.onupgradeneeded = () => open.result.createObjectStore("h");
       open.onerror = () => resolve(null);
       open.onsuccess = () => {
-        const req = fn(open.result.transaction("h", mode).objectStore("h"));
-        req.onsuccess = () => { open.result.close(); resolve(req.result ?? null); };
-        req.onerror = () => { open.result.close(); resolve(null); };
+        const db = open.result;
+        try {
+          const tx = db.transaction("h", mode);
+          const req = fn(tx.objectStore("h"));
+          tx.oncomplete = () => { db.close(); resolve(req.result ?? null); };
+          tx.onabort = () => { db.close(); resolve(null); };
+        } catch { db.close(); resolve(null); }
       };
     } catch { resolve(null); }
   });
@@ -47,7 +74,7 @@
   // Folder sa key.json: izabrani ili njegov podfolder „data” (može se izabrati i cijeli disk).
   const findData = async (handle) => {
     for (const dir of [handle, await handle.getDirectoryHandle("data").catch(() => null)]) {
-      if (dir && await dir.getFileHandle("key.json").then(() => true, () => false)) return dir;
+      if (dir && await Promise.all([dir.getFileHandle("key.json"), dir.getFileHandle("catalog.db")]).then(() => true, () => false)) return dir;
     }
     return null;
   };
@@ -57,7 +84,10 @@
     if (!HANDLES) return pick.click();
     try {
       const found = await findData(await showDirectoryPicker({ id: "allfiles", mode: "read" }));
-      if (!found) return say("U izabranom folderu nema key.json. Izaberi folder „data” ili disk na kojem je.", true);
+      if (!found) {
+        dir = picked = null; show(null); await remember(null);
+        return say("U izabranom folderu nema para key.json i catalog.db. Izaberi folder „data” ili disk na kojem je.", true);
+      }
       dir = found; picked = null;
       await remember(found);
       show(found.name);
@@ -66,11 +96,18 @@
     } catch (err) { if (err.name !== "AbortError") say(err.message, true); }
   });
   pick.addEventListener("change", () => {
-    const list = [...pick.files], key = list.find((f) => f.webkitRelativePath.endsWith("/key.json"));
-    if (!key) { picked = null; show(null); return say("U izabranom folderu nema key.json. Izaberi folder „data” pored allfiles.html.", true); }
-    const prefix = key.webkitRelativePath.slice(0, -"key.json".length);
-    picked = list.filter((f) => f.webkitRelativePath.startsWith(prefix)).map((f) => [f.webkitRelativePath.slice(prefix.length), f]);
+    const candidates = new Map();
+    for (const file of pick.files) {
+      if (file.name === "key.json" || file.name === "catalog.db") candidates.set(file.webkitRelativePath, file);
+    }
+    const root = pick.files[0]?.webkitRelativePath.split("/")[0];
+    const keys = [`${root}/key.json`, `${root}/data/key.json`, ...candidates.keys()];
+    const key = keys.find(path => path.endsWith("/key.json") && candidates.has(path) &&
+      candidates.has(path.slice(0, -"key.json".length) + "catalog.db"));
     dir = null;
+    if (!key) { picked = null; show(null); return say("U izabranom folderu nema para key.json i catalog.db. Izaberi folder „data” pored allfiles.html.", true); }
+    const prefix = key.slice(0, -"key.json".length);
+    picked = ["key.json", "catalog.db"].map(name => [name, candidates.get(prefix + name)]);
     show(`${picked.length.toLocaleString("sr-Latn")} fajlova`);
     say("Folder izabran. Upiši lozinku.");
     pass.focus();
@@ -85,20 +122,33 @@
     e.preventDefault();
     if (!dir && !picked) return say("Prvo izaberi folder „data”.", true);
     if (!pass.value) return say("Unesi lozinku.", true);
+    if (go.disabled) return;
+    choose.disabled = go.disabled = pass.disabled = true;
     if (dir) {  // dozvola se traži odmah, dok traje klik; pregledač je može pitati iznova poslije zatvaranja
-      const granted = await dir.queryPermission(READ).catch(() => "denied") === "granted" ||
-        await dir.requestPermission(READ).catch(() => "denied") === "granted";
-      if (!granted || !(await findData(dir))) {
+      let available = false;
+      try {
+        const granted = typeof dir.queryPermission !== "function" || await dir.queryPermission(READ) === "granted" ||
+          await dir.requestPermission(READ) === "granted";
+        available = granted && await findData(dir);
+      } catch { /* A removed disk or revoked handle can fail on either call. */ }
+      if (!available) {
         dir = null; show(null); remember(null);
+        choose.disabled = go.disabled = pass.disabled = false;
         return say("Zapamćeni folder nije dostupan (disk nije ubačen ili je dozvola odbijena). Izaberi ga ponovo.", true);
       }
     }
-    go.disabled = pass.disabled = true;
     onProgress = say;
     const r = await call({ t: "open", password: pass.value, list: picked, dir });
     pass.value = "";
-    if (r.error) { go.disabled = pass.disabled = false; return say(r.error, true); }
-    form.remove();
+    if (r.error) {
+      stopWorker();
+      choose.disabled = go.disabled = pass.disabled = false;
+      pass.focus();
+      return say(r.error, true);
+    }
+    URL.revokeObjectURL(workerURL);
+    dialog.close();
+    dialog.remove();
     document.body.classList.add("viewer");
     run(SRC.i18n);
     run(SRC.app);

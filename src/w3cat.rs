@@ -39,13 +39,20 @@ struct Node {
     name: String,
     archive: bool,
 }
+#[derive(Debug)]
+pub(crate) struct Volume {
+    pub id: i64,
+    pub label: String,
+    pub kind: &'static str,
+}
 
 pub fn read(
     path: &Path,
     cancel: &AtomicBool,
     details: bool,
     emit: &mut dyn FnMut(Record) -> Result<()>,
-) -> Result<()> {
+) -> Result<Vec<Volume>> {
+    scanner::check(cancel)?;
     let mut uri = url::Url::from_file_path(path)
         .map_err(|_| anyhow::anyhow!("Catalog path must be absolute"))?;
     uri.set_query(Some("mode=ro&immutable=1"));
@@ -68,10 +75,6 @@ pub fn read(
     }
 
     // Media. Two media with the same catalog name stay distinct by serial.
-    struct Volume {
-        label: String,
-        kind: &'static str,
-    }
     let mut volumes: HashMap<i64, Volume> = HashMap::new();
     {
         let mut st = db.prepare(
@@ -79,7 +82,7 @@ pub fn read(
              FROM w3_volumes w
              JOIN w3_items i ON i.id = w.id_volume
              LEFT JOIN w3_volumeInfo v ON v.id_item = i.id
-             ORDER BY i.id",
+             ORDER BY i.id LIMIT 10001",
         )?;
         let rows = st
             .query_map([], |r| {
@@ -91,6 +94,9 @@ pub fn read(
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
+        if rows.len() > 10_000 {
+            bail!("Export contains more than 10,000 media groups; split the export");
+        }
         let mut names: HashMap<&str, usize> = HashMap::new();
         for (_, name, _, _) in &rows {
             *names.entry(name.as_str()).or_default() += 1;
@@ -103,9 +109,13 @@ pub fn read(
             } else {
                 name.clone()
             };
+            if label.trim().len() > 4096 {
+                bail!("Media label or location exceeds 4096-byte limit");
+            }
             volumes.insert(
                 *id,
                 Volume {
+                    id: *id,
                     label,
                     kind: if *itype == OPTICAL {
                         "bluray"
@@ -130,6 +140,7 @@ pub fn read(
         )?;
         let mut rows = st.query([])?;
         while let Some(r) = rows.next()? {
+            scanner::check(cancel)?;
             folders.insert(
                 r.get(0)?,
                 Node {
@@ -201,7 +212,7 @@ pub fn read(
             ("disk".to_owned(), volume.label.clone()),
         ]);
         if let Some(mut record) = crate::import::record(fields)? {
-            record.kind = volume.kind;
+            record.volume_id = Some(current);
             if let Some(extras) = &mut extras {
                 let extra = extras.load(
                     r.get(4)?,
@@ -216,7 +227,9 @@ pub fn read(
             emit(record)?;
         }
     }
-    Ok(())
+    let mut media: Vec<_> = volumes.into_values().collect();
+    media.sort_unstable_by_key(|v| v.id);
+    Ok(media)
 }
 
 fn text(value: ValueRef<'_>) -> &str {
@@ -583,14 +596,92 @@ mod tests {
     }
 
     #[test]
+    fn import_keeps_volumes_with_the_same_name_and_serial_separate() -> Result<()> {
+        use crate::{
+            import::{ImportOptions, import},
+            store::Store,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir()?;
+        let path = catalog(dir.path());
+        let source = Connection::open(&path)?;
+        source.execute_batch(
+            "UPDATE w3_items SET name='Archive' WHERE id IN (1,2);
+             UPDATE w3_volumeInfo SET serial=NULL;
+             UPDATE w3_fileInfo SET name='bundle.zip' WHERE id_item=11;",
+        )?;
+        let data = dir.path().join("data");
+        fs::create_dir(&data)?;
+        let store = Arc::new(Mutex::new(Store::open(&data, "")?));
+        // Simulate the single label-based source left by an older import.
+        use sha2::{Digest, Sha256};
+        let legacy_root = format!(
+            "import://{}/{}",
+            hex::encode(&Sha256::digest(path.to_string_lossy().as_bytes())[..16]),
+            hex::encode(&Sha256::digest(b"Archive")[..8])
+        );
+        let legacy = store
+            .lock()
+            .unwrap()
+            .begin_scan(&crate::store::ScanOptions {
+                root: legacy_root,
+                label: "Archive".into(),
+                ..Default::default()
+            })?;
+        let options = ImportOptions {
+            path: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let run = || import(&store, options.clone(), &AtomicBool::new(false), &|_| {});
+        run()?;
+        let media = store.lock().unwrap().all_sources()?;
+        assert_eq!(media.len(), 2);
+        assert_eq!(media.iter().map(|s| s.file_count).sum::<i64>(), 4);
+        let disc = media.iter().find(|s| s.kind == "bluray").unwrap();
+        let disk = media.iter().find(|s| s.kind == "external").unwrap();
+        assert_eq!(disc.id, legacy.id);
+        source.execute("UPDATE w3_volumeInfo SET serial=123", [])?;
+        run()?;
+        let same_serial = store.lock().unwrap().all_sources()?;
+        assert_eq!(same_serial.len(), 2);
+        assert!(same_serial.iter().all(|s| s.label == "Archive · 123"));
+        source.execute_batch("UPDATE w3_items SET name='Renamed' WHERE id=2")?;
+        run()?;
+        let media = store.lock().unwrap().all_sources()?;
+        assert_eq!(media.len(), 2);
+        assert!(
+            media
+                .iter()
+                .any(|s| s.id == disk.id && s.label == "Renamed" && s.total_size == 6)
+        );
+        assert!(
+            media
+                .iter()
+                .any(|s| s.id == disc.id && s.file_count == 3 && s.total_size == 1320)
+        );
+        // Both volumes still exist when the last file has been deleted.
+        source.execute("DELETE FROM w3_fileInfo", [])?;
+        run()?;
+        let empty = store.lock().unwrap().all_sources()?;
+        assert_eq!(empty.len(), 2);
+        assert!(
+            empty
+                .iter()
+                .all(|s| s.file_count == 0 && s.status == "ready")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn reads_paths_media_kinds_and_skips_archive_contents() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let path = catalog(dir.path());
         let mut found = Vec::new();
-        read(&path, &AtomicBool::new(false), true, &mut |r| {
+        let volumes = read(&path, &AtomicBool::new(false), true, &mut |r| {
             found.push((
                 r.media,
-                r.kind,
+                r.volume_id.unwrap(),
                 r.file.relative,
                 r.file.size,
                 r.file.modified,
@@ -600,7 +691,13 @@ mod tests {
         found.sort();
         let names: Vec<_> = found
             .iter()
-            .map(|f| (f.0.as_str(), f.1, f.2.as_str()))
+            .map(|f| {
+                (
+                    f.0.as_str(),
+                    volumes.iter().find(|v| v.id == f.1).unwrap().kind,
+                    f.2.as_str(),
+                )
+            })
             .collect();
         assert_eq!(
             names,

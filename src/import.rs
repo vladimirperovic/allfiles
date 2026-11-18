@@ -28,9 +28,9 @@ pub struct ImportOptions {
 pub(crate) struct Record {
     pub(crate) file: ScannedFile,
     pub(crate) media: String,
+    /// Stable within a native WinCatalog database, including across label changes.
+    pub(crate) volume_id: Option<i64>,
     pub(crate) location: String,
-    /// Medium kind suggested by the source format; empty when it has none.
-    pub(crate) kind: &'static str,
 }
 struct Batch {
     source: Source,
@@ -66,7 +66,7 @@ pub fn import(
     report(state.clone());
     let mut count = 0;
     let mut total_bytes = 0i64;
-    parse(&path, cancel, false, &mut |record| {
+    let volumes = parse(&path, cancel, false, &mut |record| {
         total_bytes = total_bytes.checked_add(record.file.size).ok_or_else(|| {
             anyhow::anyhow!(
                 "Export total size exceeds the supported 64-bit limit (9223372036854775807 bytes)"
@@ -79,7 +79,7 @@ pub fn import(
         }
         Ok(())
     })?;
-    if count == 0 {
+    if count == 0 && volumes.is_empty() {
         bail!("No file records found; include filename and file path columns in the export");
     }
     unchanged(&path, &before)?;
@@ -93,7 +93,6 @@ pub fn import(
     }
     // Without an explicit kind each medium keeps the kind its source implies,
     // falling back to a disc for formats that carry none.
-    let explicit_kind = !options.kind.is_empty();
     let root = format!(
         "import://{}",
         hex::encode(&Sha256::digest(path.to_string_lossy().as_bytes())[..16])
@@ -106,49 +105,74 @@ pub fn import(
     let mut pace = scanner::Pace::new(2 * scanner::BATCH);
     state.phase = "importing".into();
     report(state.clone());
+    let begin =
+        |media: &str, location: &str, kind: &str, volume_id: Option<i64>| -> Result<Batch> {
+            let label = if media.is_empty() {
+                &options.label
+            } else {
+                media
+            };
+            let location = if options.location.is_empty() {
+                location
+            } else {
+                &options.location
+            };
+            let kind = if options.kind.is_empty() {
+                kind
+            } else {
+                &options.kind
+            };
+            let label_root = format!(
+                "{root}/{}",
+                hex::encode(&Sha256::digest(media.as_bytes())[..8])
+            );
+            let mut store = store.lock().unwrap();
+            let (media_root, source_id) = if let Some(id) = volume_id {
+                let stable_root = format!("{root}/volume-{id}");
+                let existing = store.imported_volume_id(&stable_root, &label_root, label)?;
+                (stable_root, existing.unwrap_or_default())
+            } else {
+                (label_root, String::new())
+            };
+            let source = store.begin_scan(&ScanOptions {
+                root: media_root,
+                source_id,
+                label: label.into(),
+                kind: kind.into(),
+                location: Some(location.into()),
+                ..Default::default()
+            })?;
+            Ok(Batch {
+                source,
+                entries: Vec::new(),
+            })
+        };
     let result = (|| -> Result<()> {
+        // Empty volumes also participate in finish_scans. A successful
+        // reimport must remove their previous files when the last one is gone.
+        for volume in volumes {
+            scanner::check(cancel)?;
+            let group = begin(volume.label.trim(), "", volume.kind, Some(volume.id))?;
+            groups.insert(format!("volume-{}", volume.id), group);
+        }
         parse(&path, cancel, true, &mut |record| {
-            if !groups.contains_key(&record.media) {
+            let group_key = record.volume_id.map(|id| format!("volume-{id}"));
+            let group_key = group_key.as_deref().unwrap_or(&record.media);
+            if !groups.contains_key(group_key) {
                 if groups.len() >= 10_000 {
                     bail!("Export contains more than 10,000 media groups; split the export");
                 }
-                let label = if record.media.is_empty() {
-                    options.label.clone()
-                } else {
-                    record.media.clone()
-                };
-                let location = if options.location.is_empty() {
-                    record.location.clone()
-                } else {
-                    options.location.clone()
-                };
-                let media_root = format!(
-                    "{root}/{}",
-                    hex::encode(&Sha256::digest(record.media.as_bytes())[..8])
-                );
-                let kind = if explicit_kind {
-                    options.kind.clone()
-                } else if record.kind.is_empty() {
-                    "bluray".into()
-                } else {
-                    record.kind.into()
-                };
-                let source = store.lock().unwrap().begin_scan(&ScanOptions {
-                    root: media_root,
-                    label,
-                    kind,
-                    location: Some(location),
-                    ..Default::default()
-                })?;
+                if record.volume_id.is_some() {
+                    bail!(
+                        "Export changed during import; previous entries retained, retry after saving it"
+                    );
+                }
                 groups.insert(
-                    record.media.clone(),
-                    Batch {
-                        source,
-                        entries: Vec::new(),
-                    },
+                    group_key.to_owned(),
+                    begin(&record.media, &record.location, "bluray", None)?,
                 );
             }
-            let group = groups.get_mut(&record.media).unwrap();
+            let group = groups.get_mut(group_key).unwrap();
             state.current = record.file.relative.clone();
             pending_bytes += record
                 .file
@@ -246,7 +270,7 @@ fn parse(
     cancel: &AtomicBool,
     details: bool,
     emit: &mut dyn FnMut(Record) -> Result<()>,
-) -> Result<()> {
+) -> Result<Vec<w3cat::Volume>> {
     if w3cat::is_w3cat(path) {
         return w3cat::read(path, cancel, details, emit);
     }
@@ -263,7 +287,8 @@ fn parse(
         "csv" | "tsv" | "efu" => csv(decoded, cancel, emit),
         "xml" => xml(decoded, cancel, emit),
         _ => bail!("Use a WinCatalog .w3cat database or a CSV, TSV, EFU or supported XML report"),
-    }
+    }?;
+    Ok(Vec::new())
 }
 fn normalize(s: &str) -> String {
     s.trim_start_matches('\u{feff}')
@@ -617,8 +642,8 @@ pub(crate) fn record(fields: HashMap<String, String>) -> Result<Option<Record>> 
             extra: None,
         },
         media,
+        volume_id: None,
         location,
-        kind: "",
     }))
 }
 fn date(value: &str) -> (i64, i64) {

@@ -2460,7 +2460,7 @@ Source: LICENSE
 
 
 ==============================================================================
-rustix 1.1.5 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+rustix 1.1.6 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 https://github.com/bytecodealliance/rustix
 Source: COPYRIGHT
 ==============================================================================
@@ -2469,7 +2469,7 @@ Source: COPYRIGHT
 
 
 ==============================================================================
-rustix 1.1.5 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+rustix 1.1.6 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 https://github.com/bytecodealliance/rustix
 Source: LICENSE-APACHE
 ==============================================================================
@@ -2478,7 +2478,7 @@ Source: LICENSE-APACHE
 
 
 ==============================================================================
-rustix 1.1.5 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+rustix 1.1.6 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 https://github.com/bytecodealliance/rustix
 Source: LICENSE-Apache-2.0_WITH_LLVM-exception
 ==============================================================================
@@ -2487,7 +2487,7 @@ Source: LICENSE-Apache-2.0_WITH_LLVM-exception
 
 
 ==============================================================================
-rustix 1.1.5 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+rustix 1.1.6 — Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 https://github.com/bytecodealliance/rustix
 Source: LICENSE-MIT
 ==============================================================================

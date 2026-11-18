@@ -3,44 +3,47 @@
 //! `data/catalog.db` is the catalog (without document text) as AES-256-GCM blocks of up to 4 MiB:
 //! 12-byte nonce, ciphertext, 16-byte tag. The key is Argon2id(password, salt). The additional data binds
 //! the file name, the block number and the block count, so blocks cannot be swapped and files cannot be cut short.
+use crate::{
+    encrypted_vfs::Snapshot,
+    store::{ExportCleanup, private_dir},
+};
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit, Payload},
 };
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use rusqlite::Connection;
 use serde_json::json;
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
 };
+use zeroize::Zeroizing;
 
 pub(crate) const CHUNK: usize = 4 * 1024 * 1024;
 pub(crate) const MEMORY_KIB: u32 = 65536;
 pub(crate) const PASSES: u32 = 3;
 pub(crate) const LANES: u32 = 4;
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src blob:; form-action 'none'";
-const LOCK: &str = r#"<form id="unlock"><div><h1>AllFiles</h1>
+const LOCK: &str = r#"<dialog id="viewer-lock" aria-labelledby="unlock-title"><form id="unlock"><div><h1 id="unlock-title">AllFiles</h1>
 <p>Šifrovani katalog, samo za čitanje. Sve se dešifruje u ovom pregledaču; ništa se ne šalje i ne upisuje na disk.</p>
 <div class="pick"><span>1. Folder „data” pored ovog fajla</span><div class="where"><span id="unlock-where">nije izabran</span><button id="unlock-choose" class="button" type="button">Izaberi…</button></div><input id="unlock-folder" type="file" webkitdirectory directory multiple hidden></div>
 <label>2. Lozinka kataloga<input id="unlock-password" type="password" autocomplete="off" autofocus></label>
 <button id="unlock-go" class="button button-primary" type="submit">Otvori katalog</button>
-<p id="unlock-status" role="status"></p></div></form>"#;
-const UNLOCK_CSS: &str = "#unlock{position:fixed;inset:0;z-index:99;display:grid;place-items:center;padding:16px;background:#14101f;color:#f1ecff}#unlock>div{width:min(440px,100%);display:grid;gap:14px}#unlock h1{margin:0;font-size:28px}#unlock p{margin:0;color:#b9afd6}#unlock label{display:grid;gap:6px}#unlock input{font:inherit;padding:10px;border:1px solid #4a3f6b;border-radius:8px;background:#1d1730;color:inherit}#unlock button{padding:12px;font:inherit;cursor:pointer}#unlock .pick{display:grid;gap:6px}#unlock .where{display:flex;align-items:center;gap:10px}#unlock .where span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#b9afd6}#unlock .where span.set{color:#f1ecff}#unlock .where button{padding:8px 14px;flex:none}#lock-viewer{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;padding:6px 12px;font-size:12px}#lock-viewer .icon{width:15px;height:15px}#unlock .bad{color:#ff8f7e}body.viewer [data-action=add-source],body.viewer [data-action=export],body.viewer [data-action=shutdown],body.viewer [data-view=index],body.viewer .source-card-buttons,body.viewer .add-source-card{display:none!important}";
+<p id="unlock-status" role="status"></p></div></form></dialog>"#;
+const UNLOCK_CSS: &str = include_str!("../web/viewer/style.css");
 const README: &str = "AllFiles: šifrovan katalog, samo za čitanje.\n\n1. Otvori allfiles.html dvoklikom (Chrome, Edge, Firefox ili Safari).\n2. Izaberi folder „data” pored njega i upiši lozinku kataloga.\n3. Pretražuj fajlove po nazivu i putanji i prelistavaj medije.\n\nSadržaj dokumenata nije u ovom katalogu. Bez lozinke nema oporavka.\n";
 
-fn seal(cipher: &Aes256Gcm, name: &str, source: &Path, target: &Path) -> Result<()> {
-    let size = fs::metadata(source)?.len() as usize;
+fn seal(cipher: &Aes256Gcm, name: &str, mut source: Snapshot, mut out: fs::File) -> Result<()> {
+    let size = usize::try_from(source.len()?)?;
     let count = size.div_ceil(CHUNK).max(1);
-    let mut input = fs::File::open(source)?;
-    let mut out = fs::File::create(target)?;
-    let mut block = vec![0u8; CHUNK];
+    let mut block = Zeroizing::new(vec![0u8; CHUNK]);
     for i in 0..count {
         let want = CHUNK.min(size - i * CHUNK);
-        input.read_exact(&mut block[..want])?;
+        source.read_blocks(&mut block[..want])?;
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|e| anyhow!(e.to_string()))?;
         let aad = format!("{name}\0{i}\0{count}");
@@ -110,64 +113,65 @@ pub fn html() -> String {
 
 /// Writes `destination` (which must not exist yet) with `allfiles.html` and `data/`.
 pub fn export(conn: &Connection, destination: &Path, password: &str) -> Result<PathBuf> {
-    if password.chars().count() < 12 {
-        bail!("Lozinka mora imati najmanje 12 znakova");
-    }
-    if destination.exists() {
-        bail!("Odredišni folder već postoji. Izaberite novo ime za izvoz.");
-    }
+    crate::crypto::validate_password(password)?;
     let mut partial = destination.as_os_str().to_owned();
     partial.push(".partial");
     let partial = PathBuf::from(partial);
     if partial.exists() {
         bail!("Nepotpun izvoz već postoji: {}", partial.display());
     }
-    let result = (|| -> Result<()> {
-        fs::create_dir_all(partial.join("data"))?;
-        let plain = partial.join("catalog.plain");
-        conn.execute("VACUUM main INTO ?", [plain.to_string_lossy().as_ref()])?;
-        let mut salt = [0u8; 16];
-        getrandom::fill(&mut salt).map_err(|e| anyhow!(e.to_string()))?;
-        let mut key = [0u8; 32];
-        Argon2::new(
-            Algorithm::Argon2id,
-            Version::V0x13,
-            Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).map_err(|e| anyhow!(e.to_string()))?,
-        )
-        .hash_password_into(password.as_bytes(), &salt, &mut key)
-        .map_err(|e| anyhow!(e.to_string()))?;
-        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| anyhow!("Neispravan ključ"))?;
-        let mut nonce = [0u8; 12];
-        getrandom::fill(&mut nonce).map_err(|e| anyhow!(e.to_string()))?;
-        let check = cipher
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: b"ALLFILES",
-                    aad: b"check\x000\x001",
-                },
-            )
-            .map_err(|_| anyhow!("Šifrovanje nije uspjelo"))?;
-        seal(
-            &cipher,
-            "catalog.db",
-            &plain,
-            &partial.join("data").join("catalog.db"),
-        )?;
-        fs::remove_file(&plain)?;
-        let info = json!({"v":1,"kdf":"argon2id","m":MEMORY_KIB,"t":PASSES,"p":LANES,"salt":B64.encode(salt),"check":B64.encode([nonce.to_vec(), check].concat()),"version":crate::store::VERSION,"created":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true)});
-        fs::write(
-            partial.join("data").join("key.json"),
-            serde_json::to_vec(&info)?,
-        )?;
-        fs::write(partial.join("allfiles.html"), html())?;
-        fs::write(partial.join("PROCITAJ.txt"), README)?;
-        fs::rename(&partial, destination)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&partial);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
     }
-    result?;
+    // Reserve the destination exclusively, as for native exports. Publish the
+    // reader page last so it can only open a complete key and catalog pair.
+    private_dir(destination).context("Odredišni folder već postoji ili roditeljski folder nije dostupan. Izaberite novo ime za izvoz.")?;
+    let mut output = ExportCleanup::new(destination)?;
+    let data_dir = destination.join("data");
+    private_dir(&data_dir)?;
+    let mut data = ExportCleanup::new(&data_dir)?;
+    let snapshot_path = destination.join("catalog.snapshot");
+    drop(output.create_file("catalog.snapshot")?);
+    let snapshot = Snapshot::create(conn, &snapshot_path)?;
+    let mut salt = [0u8; 16];
+    getrandom::fill(&mut salt).map_err(|e| anyhow!(e.to_string()))?;
+    let mut key = Zeroizing::new([0u8; 32]);
+    Argon2::new(
+        Algorithm::Argon2id,
+        Version::V0x13,
+        Params::new(MEMORY_KIB, PASSES, LANES, Some(32)).map_err(|e| anyhow!(e.to_string()))?,
+    )
+    .hash_password_into(password.as_bytes(), &salt, &mut *key)
+    .map_err(|e| anyhow!(e.to_string()))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(key.as_ref()).map_err(|_| anyhow!("Neispravan ključ"))?;
+    let mut nonce = [0u8; 12];
+    getrandom::fill(&mut nonce).map_err(|e| anyhow!(e.to_string()))?;
+    let check = cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: b"ALLFILES",
+                aad: b"check\x000\x001",
+            },
+        )
+        .map_err(|_| anyhow!("Šifrovanje nije uspjelo"))?;
+    seal(
+        &cipher,
+        "catalog.db",
+        snapshot,
+        data.create_file("catalog.db")?,
+    )?;
+    fs::remove_file(snapshot_path)?;
+    let info = json!({"v":1,"kdf":"argon2id","m":MEMORY_KIB,"t":PASSES,"p":LANES,"salt":B64.encode(salt),"check":B64.encode([nonce.to_vec(), check].concat()),"version":crate::store::VERSION,"created":chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs,true)});
+    data.create("key.json", &serde_json::to_vec(&info)?)?;
+    output.create("PROCITAJ.txt", README.as_bytes())?;
+    output.create("allfiles.partial", html().as_bytes())?;
+    fs::rename(
+        destination.join("allfiles.partial"),
+        destination.join("allfiles.html"),
+    )?;
+    output.complete = true;
+    data.complete = true;
     Ok(destination.to_path_buf())
 }

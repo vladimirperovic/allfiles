@@ -71,7 +71,7 @@
   }
   function parentFolder(file) {
     const path = String(file.relative_path || file.path || '');
-    const separator = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+    const separator = file.relative_path ? path.lastIndexOf('/') : Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
     if (separator < 0) return t('Osnovni folder');
     return path.slice(0, separator) || (path.startsWith('/') ? '/' : t('Osnovni folder'));
   }

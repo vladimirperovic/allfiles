@@ -1646,6 +1646,71 @@ fn file_details_are_stored_found_by_tag_bound_to_the_version_and_removed_with_th
     Ok(())
 }
 #[test]
+#[cfg(unix)]
+fn scan_indexes_literal_backslashes_from_the_filesystem() -> anyhow::Result<()> {
+    use std::sync::{Arc, Mutex, atomic::AtomicBool};
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("source");
+    let data = temp.path().join("catalog");
+    fs::create_dir_all(root.join("images/raw"))?;
+    fs::create_dir(root.join(r"images\raw"))?;
+    fs::create_dir(&data)?;
+    let files = [
+        ("images/raw/photo.txt", "nested folder"),
+        (r"images\raw/photo.txt", "literal folder"),
+        (r"images\raw\photo.txt", "literal filename"),
+    ];
+    for (path, text) in files {
+        fs::write(root.join(path), text)?;
+    }
+    let shared = Arc::new(Mutex::new(Store::open(&data, "")?));
+    crate::scanner::scan(
+        &shared,
+        ScanOptions {
+            root: root.to_string_lossy().into_owned(),
+            index_content: true,
+            ..Default::default()
+        },
+        &AtomicBool::new(false),
+        &|_| {},
+    )?;
+    let mut store = shared.lock().unwrap();
+    let results = store.search(SearchOptions::default())?.results;
+    assert_eq!(results.len(), files.len());
+    for (path, text) in files {
+        let file = results.iter().find(|f| f.relative_path == path).unwrap();
+        assert_eq!(store.file(file.id, 0, 100)?["text"], text);
+    }
+    Ok(())
+}
+
+#[test]
+fn catalog_keeps_literal_unix_backslashes_distinct_from_folder_separators() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let mut store = Store::open(temp.path(), "")?;
+    let source = store.begin_scan(&ScanOptions {
+        root: "/archive".into(),
+        label: "POSIX archive".into(),
+        ..Default::default()
+    })?;
+    let entries = [r"images\raw", "images/raw"].map(|dir| ScannedFile {
+        dir: dir.into(),
+        ..entry("photo.jpg")
+    });
+    let files = store.upsert(&source.id, "scan", &entries)?;
+    assert_ne!(files[0].id, files[1].id);
+    for (i, dir) in [r"images\raw", "images/raw"].iter().enumerate() {
+        let page = store.folder_with_cancel(&source.id, dir, 0, 10, &|| false)?;
+        assert_eq!(page["files"][0]["id"], files[i].id);
+        assert_eq!(
+            page["files"][0]["path"],
+            format!("/archive/{dir}/photo.jpg")
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn folder_view_lists_subfolders_before_files_and_pages_over_both() -> anyhow::Result<()> {
     let temp = tempfile::tempdir()?;
     let mut s = Store::open(temp.path(), "")?;
@@ -1944,6 +2009,46 @@ fn removing_a_medium_clears_files_names_text_and_stats() -> anyhow::Result<()> {
     Ok(())
 }
 #[test]
+fn browser_reader_exports_an_encrypted_source_and_preserves_existing_staging() -> anyhow::Result<()>
+{
+    let temp = tempfile::tempdir()?;
+    let source = temp.path().join("source");
+    fs::create_dir(&source)?;
+    let mut plain = Store::open(&source, "")?;
+    let encrypted = temp.path().join("encrypted");
+    let password = "synthetic test password";
+    plain.export(&encrypted, false, Some(password))?;
+    let mut store = Store::open(&encrypted, password)?;
+    let snapshot_path = temp.path().join("snapshot");
+    drop(private_file(&snapshot_path)?);
+    let mut snapshot = crate::encrypted_vfs::Snapshot::create(&store.conn, &snapshot_path)?;
+    let header = b"SQLite format 3\0";
+    assert!(!fs::read(&snapshot_path)?.starts_with(header));
+    let mut page = [0; 4096];
+    snapshot.read_blocks(&mut page)?;
+    assert!(page.starts_with(header));
+    drop(snapshot);
+    let retry = temp.path().join("retry");
+    store.conn.execute_batch("BEGIN")?;
+    assert!(store.export_viewer(&retry, password).is_err());
+    store.conn.execute_batch("ROLLBACK")?;
+    assert!(
+        !retry.exists(),
+        "a failed snapshot must release its destination"
+    );
+    let reader = temp.path().join("reader");
+    let staging = temp.path().join("reader.partial");
+    fs::create_dir(&staging)?;
+    fs::write(staging.join("keep"), "existing file")?;
+    assert!(store.export_viewer(&reader, password).is_err());
+    assert_eq!(fs::read_to_string(staging.join("keep"))?, "existing file");
+    let out = store.export_viewer(&retry, password)?;
+    assert!(out.join("data/catalog.db").metadata()?.len() > 28);
+    assert!(out.join("allfiles.html").is_file());
+    Ok(())
+}
+
+#[test]
 fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()> {
     use crate::viewer::{CHUNK, LANES, MEMORY_KIB, PASSES};
     use aes_gcm::{
@@ -1966,14 +2071,20 @@ fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()
         ..Default::default()
     };
     crate::scanner::scan(&s, o, &AtomicBool::new(false), &|_| {})?;
+    s.lock().unwrap().conn.execute(
+        "INSERT INTO meta(key,value) VALUES('test-padding',zeroblob(?))",
+        [CHUNK as i64],
+    )?;
     let out = temp.path().join("reader");
-    assert!(s.lock().unwrap().export_viewer(&out, "short").is_err());
+    let encrypted = temp.path().join("protected");
     s.lock()
         .unwrap()
-        .export_viewer(&out, "a long enough password")?;
+        .export(&encrypted, false, Some("source catalog password"))?;
+    let mut protected = Store::open(&encrypted, "source catalog password")?;
+    assert!(protected.export_viewer(&out, "short").is_err());
+    protected.export_viewer(&out, "a long enough password")?;
     assert!(
-        s.lock()
-            .unwrap()
+        protected
             .export_viewer(&out, "a long enough password")
             .is_err(),
         "an existing folder is never overwritten"
@@ -1986,6 +2097,10 @@ fn browser_export_is_encrypted_authenticated_and_openable() -> anyhow::Result<()
             && !page.contains("src=\"/app.js\"")
     );
     let sealed = fs::read(out.join("data/catalog.db"))?;
+    assert!(
+        sealed.len() > CHUNK + 28,
+        "exercise multiple authenticated blocks"
+    );
     assert!(!sealed.windows(14).any(|w| w == b"secretname.txt"));
     let info: serde_json::Value = serde_json::from_slice(&fs::read(out.join("data/key.json"))?)?;
     let derive = |password: &str| -> anyhow::Result<Aes256Gcm> {

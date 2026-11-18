@@ -19,7 +19,7 @@ const BLOCK: usize = 4096;
 
 struct Context {
     original: *mut sqlite3_vfs,
-    keys: [(String, [u8; 32]); 2],
+    keys: Vec<(String, [u8; 32])>,
 }
 impl Drop for Context {
     fn drop(&mut self) {
@@ -61,18 +61,18 @@ fn canonical(path: &Path) -> Result<String> {
 }
 impl EncryptedVfs {
     pub fn new(dir: &Path, keys: Arc<Encryption>) -> Result<Self> {
+        Self::register(vec![
+            (canonical(&dir.join("catalog.sqlite"))?, *keys.catalog),
+            (canonical(&dir.join("content.sqlite"))?, *keys.content),
+        ])
+    }
+    fn register(keys: Vec<(String, [u8; 32])>) -> Result<Self> {
         unsafe {
             let original = sqlite3_vfs_find(ptr::null());
             if original.is_null() {
                 bail!("SQLite native VFS unavailable");
             }
-            let mut context = Box::new(Context {
-                original,
-                keys: [
-                    (canonical(&dir.join("catalog.sqlite"))?, *keys.catalog),
-                    (canonical(&dir.join("content.sqlite"))?, *keys.content),
-                ],
-            });
+            let mut context = Box::new(Context { original, keys });
             let name = CString::new(format!("allfiles-{}", random_id()))?;
             let mut vfs: Box<sqlite3_vfs> = Box::new(mem::zeroed());
             vfs.iVersion = 2;
@@ -102,6 +102,42 @@ impl EncryptedVfs {
     }
     pub fn name(&self) -> &str {
         self.name.to_str().unwrap()
+    }
+}
+/// Compact SQLite image for a browser export. Even an interrupted export
+/// leaves only ciphertext on disk. The one-use staging key stays in memory.
+pub struct Snapshot {
+    file: std::fs::File,
+    cipher: Cipher,
+    offset: u64,
+}
+impl Snapshot {
+    pub fn create(conn: &rusqlite::Connection, path: &Path) -> Result<Self> {
+        let mut key = zeroize::Zeroizing::new([0u8; 32]);
+        getrandom::fill(&mut *key).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let vfs = EncryptedVfs::register(vec![(canonical(path)?, *key)])?;
+        conn.execute("VACUUM main INTO ?", [crate::store::uri(path, Some(&vfs))?])?;
+        Ok(Self {
+            file: std::fs::File::open(path)?,
+            cipher: Cipher::new((&*key).into()),
+            offset: 0,
+        })
+    }
+    pub fn len(&self) -> Result<u64> {
+        Ok(self.file.metadata()?.len())
+    }
+    pub fn read_blocks(&mut self, buf: &mut [u8]) -> Result<()> {
+        use std::io::Read;
+        anyhow::ensure!(
+            buf.len().is_multiple_of(BLOCK),
+            "Incomplete catalog snapshot"
+        );
+        self.file.read_exact(buf)?;
+        for block in buf.as_chunks_mut::<BLOCK>().0 {
+            self.cipher.decrypt(block, &self.offset.to_le_bytes());
+            self.offset += BLOCK as u64;
+        }
+        Ok(())
     }
 }
 impl Drop for EncryptedVfs {

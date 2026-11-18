@@ -153,7 +153,7 @@ pub fn scan(
                 }
                 continue;
             };
-            let relative = relative.replace('\\', "/");
+            let relative = relative.replace(std::path::MAIN_SEPARATOR, "/");
             let name = entry
                 .file_name()
                 .to_str()

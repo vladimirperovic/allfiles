@@ -1,4 +1,33 @@
-# Validation of 0.1.6
+# Validation
+
+## Application audit on 2026-11-18
+
+The Windows x64 release build was exercised with synthetic media and documents, a native WinCatalog fixture, and a historical encrypted Go catalog. Browser checks used headless Microsoft Edge, including an exported reader opened directly from disk.
+
+| Area | Failure or boundary checked | Verification |
+|---|---|---|
+| Browser export | Exporting from an encrypted catalog failed when SQLite tried to create the staging database. An export from a plaintext source wrote a plaintext staging file. | The staging image is encrypted with a one-use key. Tests read it back, decrypt a multi-block browser export, check the recovered SQLite file, and verify cleanup and retry after a failed export. |
+| WinCatalog import | Two volumes with the same label and no serial collapsed into one medium. The same relative filename could overwrite the other volume's entry. Empty volumes were skipped. | Reimport tests check independent file counts and sizes, adoption of a legacy source ID, equal serials, a rename, and deletion of the last files from both volumes. |
+| Offline reader | The service returned 252 media and the reader listed 200. Ratings, EXIF and audio were missing. A query of 501 emoji received HTTP 400 in the reader. | The browser suite compares source lists, the last page, file details, Unicode searches and folder order against the running service. |
+| Unlock screen | Keyboard focus could reach the dashboard behind the password form. | The native dialog keeps the dashboard inert. The suite tries an unsupported manifest and a wrong password, opens the valid export, then locks it again. |
+| Portable paths | A literal backslash in a Unix filename was treated as a folder separator. | The store test distinguishes two directories with the same path under the old normalization. A separate filesystem scan and content test covers this case on Unix. |
+
+| Check | Result |
+|---|---:|
+| Rust tests on Windows, including Go-format compatibility | 74/74 |
+| Search results against an independent oracle | 568/568 |
+| Storage and lifecycle suites | 12/12 and 65/65 |
+| Document extraction | 17/17 |
+| HTTP/MCP and server concurrency suites | 10/10 and 20/20 |
+| Frontend state suites and live API contract | 6/6, 33/33 and 6/6 |
+| Browser interface and offline reader, service recovery, static demo | 38/38, 11/11 and 25/25 |
+| Dependency snapshot tests | 9/9 |
+
+Formatting, Clippy with warnings denied, release compilation and the HTTP/MCP smoke test passed. Four grouped and interleaved imports of 20,000 rows produced the same expected metadata. Linux x64 test code passed a cross-target Cargo check. Linux and macOS runtime behavior was outside this local run.
+
+The lockfile audit reported zero vulnerabilities after updating `rustix` to 1.1.6. Two maintenance advisories remain for `chrono` and `ttf-parser`. [rustix advisory](https://rustsec.org/advisories/RUSTSEC-2026-0486.html), [chrono advisory](https://github.com/RustSec/advisory-db/blob/main/crates/chrono/RUSTSEC-2026-0543.md), [ttf-parser advisory](https://rustsec.org/advisories/RUSTSEC-2026-0192.html).
+
+## Release 0.1.6
 
 Recorded on 2026-10-29. All 26 validation stages passed against the patched local Windows release, including **52/52 Rust tests**, **568/568 search checks**, **31/31 browser checks**, **11/11 recovery checks**, formatting, Clippy, extraction/import/storage regressions, Go tests/vet/race and encrypted compatibility. The two added Rust tests exercise XML attribute limits and malformed input. Existing 0.1.5 results and benchmark observations below remain historical measurements; they have not been relabeled as new performance runs.
 

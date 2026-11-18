@@ -118,6 +118,8 @@ Point AllFiles directly at the native WinCatalog database (`.w3cat`). It is open
 
 The reader also brings over, per file, WinCatalog's **thumbnail**, **EXIF** (camera, lens, size, date taken, ISO, exposure, aperture, focal length, flash, GPS), **audio tags** (title, artist, album, year, track, genre, duration, bitrate), **tags**, **rating** (shown as 1–5 stars), **comment** and **CRC32** where present. They show in the file view, and a tag can be clicked to list the files that carry it. WinCatalog records CRC32 only for entries inside archives (which are skipped) and its md5 column is empty in the catalog this was tested on, so neither is usually present; md5 is not imported. Thumbnails are stored in `content.sqlite` (about 2.4 GB for 220,000 thumbnails), everything else in `catalog.sqlite` (+48 MB). A catalog with about 433,000 items (348,000 files, 10 media, 220,000 thumbnails) imported in about 30 seconds. Re-running the same import updates the same media instead of duplicating them: details removed in WinCatalog are removed here, and thumbnails that did not change are not written again. The `.w3cat` file may be larger than 2 GiB (up to 64 GiB). A WinCatalog password only protects WinCatalog's own interface; the data is not encrypted, and AllFiles does not ask for or check that password.
 
+When you import the same `.w3cat` file again from the same path, AllFiles uses each volume's WinCatalog ID. Media with identical names and serial numbers stay separate. Renamed volumes keep their catalog entries, and a volume whose last file was removed appears empty after a successful reimport.
+
 Alternatively, start with a CSV report containing filenames, paths, sizes and, if applicable, media labels. Common CSV/TSV layouts, EFU file lists and recognized XML reports are supported:
 
 ```sh
@@ -158,6 +160,8 @@ and paths and open folders. Nothing is installed, sent or written to disk. It is
 use the application for content search, scanning and removal. The format is AES-256-GCM in blocks of up to 4 MiB
 (12-byte nonce, ciphertext, 16-byte tag) with a key from Argon2id (64 MiB, 3 passes, 4 lanes); the additional data binds
 file name, block number and block count. The page has a Content-Security-Policy of `default-src 'none'`.
+
+The reader lists the full set of media and shows ratings, tags, comments, CRC32, EXIF and audio metadata when present. Export also works from an encrypted catalog. The temporary SQLite image used to build the reader is encrypted with a one-use key held in memory. To get these fixes in a previously exported reader, create a fresh export.
 
 Chrome and Edge remember the folder you chose (only a reference to the folder in the browser's storage, never the
 password), so next time you only type the password; if the folder is not there (the disc is not inserted) the reader

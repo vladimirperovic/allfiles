@@ -26,18 +26,27 @@ async function open({ password, list, dir }, say) {
     }
   }
   if (!files.has("key.json") || !files.has("catalog.db")) throw new Error("U izabranom folderu nema key.json i catalog.db");
-  info = JSON.parse(new TextDecoder().decode(await files.get("key.json").arrayBuffer()));
+  const manifest = files.get("key.json");
+  if (manifest.size > 4096) throw new Error("Neispravan key.json");
+  info = JSON.parse(await manifest.text());
+  if (info?.v !== 1 || info.kdf !== "argon2id" || info.m !== 65536 || info.t !== 3 || info.p !== 4 ||
+      typeof info.salt !== "string" || b64(info.salt).length !== 16 ||
+      typeof info.check !== "string" || b64(info.check).length !== 36) {
+    throw new Error("Nepodržan ili oštećen key.json");
+  }
+  const file = files.get("catalog.db"), size = file.size - chunks(file) * OV;
+  if (size <= 0 || file.size - (chunks(file) - 1) * (CH + OV) <= OV) throw new Error("Nepotpun catalog.db");
   exported = info.created ? Date.parse(info.created) / 1000 : files.get("key.json").lastModified / 1000;  // stariji izvozi nemaju datum: vrijeme fajla
   say("Računam ključ iz lozinke…");
   const raw = await hashwasm.argon2id({ password, salt: b64(info.salt), parallelism: info.p, iterations: info.t, memorySize: info.m, hashLength: 32, outputType: "binary" });
-  key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
+  try { key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]); }
+  finally { raw.fill(0); }
   try {
     const c = b64(info.check);
     await crypto.subtle.decrypt({ name: "AES-GCM", iv: c.subarray(0, 12), additionalData: aad("check", 0, 1) }, key, c.subarray(12));
   } catch { throw new Error("Pogrešna lozinka"); }
   say("Pokrećem SQLite…");
   sqlite3 = await sqlite3InitModule({ wasmBinary: b64(WASM), print() {}, printErr() {} });
-  const file = files.get("catalog.db"), size = file.size - chunks(file) * OV;
   let ptr;
   try { ptr = sqlite3.wasm.alloc(size); } catch { throw new Error(`Nema dovoljno memorije u pregledaču za katalog od ${Math.round(size / 1e6)} MB. Zatvori druge kartice ili otvori na računaru sa više memorije.`); }
   await decryptInto("catalog.db", (o, p) => sqlite3.wasm.heap8u().set(p, ptr + o), (f) => say(`Dešifrujem katalog… ${Math.round(f * 100)}%`));
@@ -56,6 +65,15 @@ const fold = (s) => {
   return /^[\x00-\x7f]*$/.test(l) ? l : l.normalize("NFC").replace(/[čć]/g, "c").replace(/š/g, "s").replace(/ž/g, "z").replace(/đ/g, "dj");
 };
 const glob = (v) => v.replace(/[\[*?]/g, (c) => `[${c === "[" ? "[" : c}]`);
+// Rust orders UTF-8 strings by Unicode scalar value, independently of the OS locale.
+function compareText(a, b) {
+  for (let i = 0; i < a.length && i < b.length;) {
+    const left = a.codePointAt(i), right = b.codePointAt(i);
+    if (left !== right) return left - right;
+    i += left > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
+}
 const COLUMNS = "f.id,f.name,d.path AS dir,s.id AS source_id,s.label,s.kind,s.location,f.size,f.modified,f.extension,f.text_status,f.text_detail,s.root";
 const FROM = " FROM files f JOIN directories d ON d.id=f.dir_id JOIN sources s ON s.id=f.source_id ";
 const NO_TEXT = "Čitač u pregledaču ne sadrži tekst dokumenata.";
@@ -72,11 +90,14 @@ const rows = (ids, order) => ids.length ? q(`SELECT ${COLUMNS}${FROM} WHERE f.id
 
 function sources(p) {
   const where = p.id ? " WHERE s.id=?" : "", args = p.id ? [p.id] : [];
+  const sql = `SELECT s.id,s.root,s.label,s.kind,s.location,s.last_scan,s.status,(SELECT COUNT(*) FROM files f WHERE f.source_id=s.id) AS file_count,
+    (SELECT COALESCE(SUM(f.size),0) FROM files f WHERE f.source_id=s.id) AS total_size FROM sources s${where} ORDER BY s.label,s.id`;
+  if (!("id" in p || "offset" in p || "limit" in p)) return { sources: q(sql) };
+  const offset = Number(p.offset ?? 0), limit = Number(p.limit ?? 100);
+  if (!Number.isInteger(offset) || offset < 0 || offset > 1000000 || !Number.isInteger(limit) || limit < 1 || limit > 200) fail("Neispravna stranica izvora");
+  const list = q(sql + " LIMIT ? OFFSET ?", [...args, limit, offset]);
   const total = one(`SELECT count(*) FROM sources s${where}`, args);
-  const offset = +p.offset || 0, limit = +p.limit || 200;
-  const list = q(`SELECT s.id,s.root,s.label,s.kind,s.location,s.last_scan,s.status,(SELECT COUNT(*) FROM files f WHERE f.source_id=s.id) AS file_count,
-    (SELECT COALESCE(SUM(f.size),0) FROM files f WHERE f.source_id=s.id) AS total_size FROM sources s${where} ORDER BY s.label,s.id LIMIT ? OFFSET ?`, [...args, limit, offset]);
-  return "id" in p || "offset" in p || "limit" in p ? { has_more: offset + list.length < total, sources: list, total, offset, limit } : { sources: list };
+  return { has_more: offset + list.length < total, sources: list, total, offset, limit };
 }
 function status() {
   const s = q("SELECT files,bytes,documents,sources FROM catalog_stats WHERE id=1")[0];
@@ -90,7 +111,7 @@ function selective(term, g, limit) {
 }
 function search(p) {
   const t0 = performance.now(), limit = +p.limit > 0 && +p.limit <= 200 ? +p.limit : 100, offset = Math.max(0, +p.offset || 0);
-  if ((p.q || "").length > 1000) fail("Upit je predugačak");
+  if ([...(p.q || "")].length > 1000) fail("Upit je predugačak");
   if (p.mode === "content") fail(NO_TEXT);
   const where = ["1=1"], args = [];
   if (p.source) { where.push("f.source_id=?"); args.push(p.source); }
@@ -115,8 +136,9 @@ function folder(p) {
   const t0 = performance.now(), source = p.source || "", offset = Math.max(0, +p.offset || 0), limit = +p.limit > 0 && +p.limit <= 200 ? +p.limit : 100;
   const src = q("SELECT label,kind FROM sources WHERE id=?", [source])[0];
   if (!src) fail("Folder not found", 404);
-  let path = (p.path || "").replaceAll("\\", "/");
-  path = path.replace(/\/+$/, "") === "" && path !== "" ? "/" : path.replace(/\/+$/, "");
+  const trimPath = value => value.replace(/\/+$/, "") || (value ? "/" : "");
+  const requested = p.path || "";
+  let path = trimPath(requested);
   const level = (path) => {
     const prefix = path === "" ? "" : `${path}/`, folders = new Map();
     if (path !== "/") for (const r of q("SELECT d.path,count(f.id) AS n,coalesce(sum(f.size),0) AS s FROM directories d JOIN files f ON f.dir_id=d.id WHERE d.source_id=? AND d.path GLOB ? GROUP BY d.id", [source, `${glob(prefix)}*`])) {
@@ -127,11 +149,15 @@ function folder(p) {
       folders.set(rest.slice(0, end), [e[0] + r.n, e[1] + r.s]);
     }
     const dir = q("SELECT id FROM directories WHERE source_id=? AND path=?", [source, path])[0]?.id;
-    return { prefix, dir, folders: [...folders].sort((a, b) => fold(a[0]).localeCompare(fold(b[0])) || (a[0] < b[0] ? -1 : 1)), files: dir ? one("SELECT count(*) FROM files WHERE dir_id=?", [dir]) : 0 };
+    const ordered = [...folders].sort(([a], [b]) => compareText(fold(a), fold(b)) || compareText(a, b));
+    return { prefix, dir, folders: ordered, files: dir ? one("SELECT count(*) FROM files WHERE dir_id=?", [dir]) : 0 };
   };
   let lv = level(path);
-  if (!lv.folders.length && !lv.dir && path.startsWith("/")) { path = path.replace(/^\/+/, ""); lv = level(path); }
-  if (!lv.folders.length && !lv.dir && path) fail("Folder not found", 404);
+  if (!lv.folders.length && !lv.files && requested.includes("\\")) {
+    path = trimPath(requested.replaceAll("\\", "/")); lv = level(path);
+  }
+  if (!lv.folders.length && !lv.files && path.startsWith("/")) { path = path.replace(/^\/+/, ""); lv = level(path); }
+  if (!lv.folders.length && !lv.files && path) fail("Folder not found", 404);
   const page = lv.folders.slice(offset, offset + limit).map(([name, [files, size]]) => ({ name, path: `${lv.prefix}${name}`, files, size }));
   const fileLimit = limit - page.length, fileOffset = Math.max(0, offset - lv.folders.length);
   const ids = lv.dir && fileLimit > 0 ? q("SELECT id FROM files WHERE dir_id=? ORDER BY search_name,id LIMIT ? OFFSET ?", [lv.dir, fileLimit, fileOffset]).map((r) => r.id) : [];
@@ -144,7 +170,16 @@ function file(p) {
   const r = fileResult(f), details = {};
   const i = q("SELECT crc32,rating,comment FROM file_info WHERE file_id=?", [+p.id])[0];
   if (i?.crc32) details.crc32 = i.crc32;
+  if (i?.rating != null) details.rating = Math.max(1, Math.min(5, Math.ceil(i.rating / 20)));
   if (i?.comment) details.comment = i.comment;
+  for (const [name, sql] of [
+    ["exif", "SELECT camera,lens,width,height,taken,iso,exposure,aperture,focal_length,flash,gps FROM file_exif WHERE file_id=?"],
+    ["audio", "SELECT artist,album,year,track,genre,title,duration,bitrate,channels,sample_rate FROM file_audio WHERE file_id=?"],
+  ]) {
+    const row = q(sql, [+p.id])[0];
+    if (row) details[name] = Object.fromEntries(Object.entries(row).filter(([, value]) =>
+      typeof value === "number" ? value > 0 : value != null && value !== ""));
+  }
   const tags = q("SELECT t.name FROM file_tags ft JOIN tags t ON t.id=ft.tag_id WHERE ft.file_id=? ORDER BY t.name COLLATE NOCASE", [+p.id]).map((t) => t.name);
   if (tags.length) details.tags = tags;
   return { file: r, details, text: "", text_status: r.text_status, text_detail: r.text_detail, offset: 0, returned_chars: 0, total_chars: 0, has_more: false };

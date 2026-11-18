@@ -2,11 +2,14 @@
 // Usage: node scripts/audit2_browser.mjs BINARY [OUTPUT_DIRECTORY]
 // Install playwright-core separately, or reuse .tmp/ui/node_modules.
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
+import { copyFile, mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { spawn, spawnSync } from 'node:child_process';
 import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
+import { isDeepStrictEqual } from 'node:util';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require(require.resolve('playwright-core', { paths: [process.cwd(), resolve('.tmp/ui')] }));
@@ -19,9 +22,19 @@ await mkdir(docs); await mkdir(data);
 await writeFile(join(docs, '001-prikaz.txt'), 'STARI SADRZAJ proverabrowsera čćšžđ');
 for (let i = 1; i <= 125; i++) await writeFile(join(docs, `primer-${String(i).padStart(3, '0')}.txt`), `Browser dokument ${i} za pregled i pretragu. čćšžđ`);
 const imported = join(root, 'mediji.csv');
-await writeFile(imported, 'Filename,Size,Disk\n' + Array.from({ length: 251 }, (_, i) => `archive-${i}.txt,1,Media-${String(i).padStart(3, '0')}`).join('\n'));
+const reportRows = Array.from({ length: 251 }, (_, i) => `archive-${i}.txt,1,Media-${String(i).padStart(3, '0')}`);
+for (const folder of ['Z', 'ä', '\uE000', '😀']) reportRows.push(`${folder}/photo.jpg,2,Media-250`);
+await writeFile(imported, 'Filename,Size,Disk\n' + reportRows.join('\n'));
 const scan = spawnSync(binary, ['scan', '--data', data, '--root', docs, '--content'], { encoding: 'utf8', windowsHide: true });
 if (scan.status) throw new Error(scan.stderr);
+// Imported details also live in the browser export. Seed a closed synthetic
+// catalog so the service and the offline reader can answer for the same file.
+const fixture = new DatabaseSync(join(data, 'catalog.sqlite'));
+const sampleId = fixture.prepare("SELECT id FROM files WHERE name='primer-001.txt'").get().id;
+fixture.prepare('INSERT INTO file_info(file_id,rating,comment) VALUES(?,75,?)').run(sampleId, 'Test comment');
+fixture.prepare("INSERT INTO file_exif(file_id,camera,width,height) VALUES(?,'Test camera',4032,3024)").run(sampleId);
+fixture.prepare("INSERT INTO file_audio(file_id,artist,duration,channels) VALUES(?,'Test artist',12.5,2)").run(sampleId);
+fixture.close();
 const proc = spawn(binary, ['serve', '--data', data, '--port', '0', '--no-browser'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
 const base = await new Promise((yes, no) => {
   let text = '';
@@ -202,6 +215,61 @@ try {
   record('mobile viewport has no horizontal page overflow', dimensions.document <= dimensions.viewport, dimensions);
   await page.screenshot({ path: join(output, 'browser-mobile.png'), fullPage: true });
   record('all dashboard search requests retain the 60-file API batch', searchRequests.length > 0 && searchRequests.every(query => new URLSearchParams(query).get('limit') === '60'), { requests: searchRequests.length, limits: [...new Set(searchRequests.map(query => new URLSearchParams(query).get('limit')))] });
+  const destination = join(root, 'USB reader');
+  const password = 'synthetic reader password';
+  await api('/api/export', { destination, browser: true, encrypt: true, password });
+  const reader = await browser.newPage();
+  reader.setDefaultTimeout(15000);
+  reader.on('pageerror', error => errors.push(error.message));
+  await reader.goto(pathToFileURL(join(destination, 'allfiles.html')).href);
+  await reader.locator('#unlock-go').focus();
+  await reader.keyboard.press('Tab');
+  await reader.keyboard.press('Escape');
+  const locked = await reader.evaluate(() => {
+    document.querySelector('#search-input').focus();
+    return document.activeElement !== document.querySelector('#search-input') && !!document.querySelector('#unlock')?.getClientRects().length;
+  });
+  record('locked reader keeps keyboard focus off the dashboard, including after Escape', locked, { locked });
+  const incompatible = join(root, 'incompatible');
+  await mkdir(incompatible);
+  const keyInfo = JSON.parse(await readFile(join(destination, 'data/key.json'), 'utf8'));
+  await writeFile(join(incompatible, 'key.json'), JSON.stringify({ ...keyInfo, v: 2 }));
+  await copyFile(join(destination, 'data/catalog.db'), join(incompatible, 'catalog.db'));
+  await reader.locator('#unlock-folder').setInputFiles(incompatible);
+  await reader.locator('#unlock-password').fill(password);
+  await reader.locator('#unlock-go').click();
+  await reader.locator('#unlock-status').filter({ hasText: 'key.json' }).waitFor();
+  record('an unsupported reader manifest leaves the form available for retry', await reader.locator('#unlock-go').isEnabled(), {});
+  await reader.locator('#unlock-folder').setInputFiles(join(destination, 'data'));
+  await reader.locator('#unlock-password').fill('incorrect test password');
+  await reader.locator('#unlock-go').click();
+  await reader.locator('#unlock-status').filter({ hasText: 'Pogrešna lozinka' }).waitFor();
+  await reader.locator('#unlock-password').fill(password);
+  await reader.locator('#unlock-go').click();
+  await reader.locator('#file-rows tr').first().waitFor();
+  const readerGet = path => reader.evaluate(async url => {
+    const response = await fetch(url);
+    return { status: response.status, body: await response.json() };
+  }, path);
+  const media = (await readerGet('/api/sources')).body.sources;
+  const tail = (await readerGet('/api/sources?offset=200&limit=100')).body;
+  record('offline reader lists every medium and preserves source pagination', isDeepStrictEqual(media, allSources) && isDeepStrictEqual(tail, await api('/api/sources?offset=200&limit=100')), { expected: allSources.length, listed: media.length, lastPage: tail.sources.length });
+  const lastMedium = allSources.find(source => source.label === 'Media-250');
+  const folderPath = '/api/folder?source=' + lastMedium.id;
+  const nativeFolders = (await api(folderPath)).folders;
+  const readerFolders = (await readerGet(folderPath)).body.folders;
+  record('offline folder order agrees with the service across scripts and locales', nativeFolders.length === 4 && isDeepStrictEqual(readerFolders, nativeFolders), readerFolders.map(f => f.name));
+  const detailsPath = '/api/file?id=' + sampleId;
+  const nativeDetails = (await api(detailsPath)).details;
+  const offlineDetails = (await readerGet(detailsPath)).body.details;
+  record('offline rating, EXIF and audio match native file details', nativeDetails.rating === 4 && isDeepStrictEqual(offlineDetails, nativeDetails), offlineDetails);
+  const unicode = '/api/search?q=' + encodeURIComponent('😀'.repeat(501));
+  const found = await readerGet(unicode);
+  record('offline and native search count Unicode code points for the query limit', found.status === 200 && found.body.total === (await api(unicode)).total, { status: found.status });
+  await reader.locator('#lock-viewer').click();
+  await reader.locator('#unlock-password').waitFor();
+  record('locking an opened local HTML reader clears the password and returns to unlock', await reader.locator('#unlock-password').inputValue() === '' && await reader.locator('#file-rows tr').count() === 0, {});
+  await reader.close();
   record('no browser JavaScript exceptions', errors.length === 0, errors);
 } catch (error) { record('harness completed', false, String(error.stack)); }
 finally {
